@@ -13,7 +13,7 @@ Certifique-se de ter o seguinte instalado em seu sistema:
 1. **Clone o repositório**:
    ```sh
    git clone <URL_DO_REPOSITORIO>
-   cd cripto1
+   cd tcc-mdvrp
     ```
 2. **Crie o ambiente virtual**:
    ```sh
