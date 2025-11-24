@@ -3,3 +3,7 @@ __pycache__/
 venv/
 .env
 /ven/
+*.csv
+*.png
+*.gif
+*.mp4
