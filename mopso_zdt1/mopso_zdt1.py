@@ -497,8 +497,8 @@ if __name__ == "__main__":
     C2 = 2.0 # Common value
     W_MAX = 0.9 # Common initial inertia
     W_MIN = 0.4 # Common final inertia
-    SWARM_CSV = "mopso_zdt1/mopso_swarm_history.csv"
-    ARCHIVE_CSV = "mopso_zdt1/mopso_archive_history.csv"
+    SWARM_CSV = "mopso_swarm_history.csv"
+    ARCHIVE_CSV = "mopso_archive_history.csv"
 
     print("Running MOPSO for ZDT1 and saving history...")
     final_positions, final_objectives = mopsopt_and_save_history(

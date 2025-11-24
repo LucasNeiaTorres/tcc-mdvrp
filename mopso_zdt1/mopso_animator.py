@@ -125,7 +125,7 @@ def create_animation(swarm_history, archive_history, max_iter, filename="mopso_z
     ani = animation.FuncAnimation(fig, update, frames=max_iter + 1, interval=100, blit=True)
 
     try:
-        ani.save(filename.replace(".gif", ".mp4"), writer='ffmpeg', fps=5) # fps = 1000 / interval
+        ani.save(filename.replace(".gif", ".mp4"), writer='ffmpeg', fps=2) # fps = 1000 / interval
         print(f"Animation saved as '{filename}'")
     except Exception as e:
         print(f"Error saving animation: {e}")
@@ -135,9 +135,9 @@ def create_animation(swarm_history, archive_history, max_iter, filename="mopso_z
 
 # --- Main execution block for animator ---
 if __name__ == "__main__":
-    SWARM_CSV = "mopso_zdt1/mopso_swarm_history.csv"
-    ARCHIVE_CSV = "mopso_zdt1/mopso_archive_history.csv"
-    ANIMATION_FILE = "mopso_zdt1/mopso_zdt1_animation_from_csv.gif"
+    SWARM_CSV = "mopso_swarm_history.csv"
+    ARCHIVE_CSV = "mopso_archive_history.csv"
+    ANIMATION_FILE = "mopso_zdt1_animation_from_csv.gif"
 
     print("Loading history from CSV files...")
     swarm_hist, archive_hist, max_iter_from_data = load_history_from_csv(SWARM_CSV, ARCHIVE_CSV)
