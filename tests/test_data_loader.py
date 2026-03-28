@@ -16,7 +16,6 @@ def test_read_cordeau_data_file():
     assert len(inst.capacity_limits) == 4
     assert len(inst.customers) == 50
     assert len(inst.depots) == 4
-    # Check one known customer data
     first_customer = inst.customers[0]
     assert first_customer.index == 1
     assert first_customer.x == 37
