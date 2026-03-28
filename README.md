@@ -1,5 +1,42 @@
 # tcc-mdvrp
 
+## Estrutura do projeto
+
+tcc_mdvrp/
+│
+├── data/                  # Arquivos de entrada (instâncias)
+│   ├── raw/               # Bases de dados originais
+│   └── processed/         # Bases de dados adaptadas
+│
+├── notebooks/             # Exclusivo para Jupyter Notebooks
+│
+├── src/
+│   ├── __init__.py
+│   ├── core/              # Entidades do problema
+│   │   ├── __init__.py
+│   │   ├── entities.py    # Classes: Cliente, Deposito, Veiculo, Rota
+│   │   └── solution.py    # Classe que representa uma Solução inteira e calcula Fitness
+│   │
+│   ├── algorithms/        # Os algoritmos
+│   │   ├── __init__.py
+│   │   ├── pso.py         # Lógica do enxame (partículas, velocidade)
+│   │   └── split.py       # Algoritmo de divisão da rota gigante
+│   │
+│   ├── utils/             # Ferramentas auxiliares
+│   │   ├── __init__.py
+│   │   ├── data_loader.py # Lógica para ler os .txt do diretório /data
+│   │   └── metrics.py     # Funções para calcular distância euclidiana, etc
+│   │
+│   └── main.py
+│
+├── tests/
+│   ├── __init__.py
+│
+├── config.yaml            # Parâmetros do algoritmo (inércia, max_iter, capacidade)
+├── requirements.txt       # Dependências (numpy, matplotlib, etc)
+└── README.md              # Como rodar o seu projeto
+
+
 ## Descrição
 
 
