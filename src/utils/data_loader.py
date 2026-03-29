@@ -1,6 +1,6 @@
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple
+from typing import List, Optional, Tuple
 
 @dataclass
 class VisitCombination:
@@ -10,7 +10,7 @@ class VisitCombination:
 
 @dataclass
 class Node:
-    index: int  # i: ustomer/depot number (1 to n for customers, n+1 to n+t for depots)
+    index: int  # i: customer/depot number (1 to n for customers, n+1 to n+t for depots)
     x: float
     y: float
     service_time: float  # d: time required to serve this customer
@@ -19,6 +19,23 @@ class Node:
     combination_count: int  # a: number of visit combinations
     combinations: List[VisitCombination] = field(default_factory=list)  # list: visit combinations (code and corresponding days)
     time_window: Optional[Tuple[float, float]] = None  # optional time window (e, l) for service start time
+
+
+@dataclass
+class ParsedRoute:
+    depot: int  # l: number of the depot
+    vehicle: int  # k: number of the vehicle
+    duration: float  # d: duration of the route
+    load: float  # q: load of the vehicle
+    nodes: List[int]  # list: ordered sequence of customers
+
+    @property
+    def depot_index(self) -> int:
+        return self.depot
+
+    @property
+    def customer_indices(self) -> List[int]:
+        return self.nodes
 
 
 @dataclass
@@ -34,18 +51,13 @@ class CordeauInstance:
 
 
 @dataclass
-class Route:
-    depot: int  # l: number of the depot
-    vehicle: int  # k: number of the vehicle
-    duration: float  # d: duration of the route
-    load: float  # q: load of the vehicle
-    nodes: List[int]  # list: ordered sequence of customers
-
-
-@dataclass
 class CordeauSolution:
     objective: float
-    routes: List[Route]
+    routes: List[ParsedRoute]
+
+    @property
+    def visualizable_routes(self) -> List[ParsedRoute]:
+        return self.routes
 
 
 def _code_to_days(code: int, period: int) -> List[int]:
@@ -57,15 +69,7 @@ def _code_to_days(code: int, period: int) -> List[int]:
 
 
 def read_cordeau_data_file(path: str) -> CordeauInstance:
-    """
-    Read a Cordeau MDVRP data file.
-    
-    Args:
-        path: Path to the Cordeau data file
-        
-    Returns:
-        CordeauInstance containing parsed data
-    """
+    """Read a Cordeau MDVRP data file."""
     p = Path(path)
     if not p.exists():
         raise FileNotFoundError(f"File not found: {path}")
@@ -167,15 +171,7 @@ def read_cordeau_data_file(path: str) -> CordeauInstance:
 
 
 def read_cordeau_solution_file(path: str) -> CordeauSolution:
-    """
-    Read a Cordeau MDVRP solution file.
-    
-    Args:
-        path: Path to the Cordeau solution file
-        
-    Returns:
-        CordeauSolution containing parsed routes and objective value
-    """
+    """Read a Cordeau MDVRP solution file."""
     p = Path(path)
     if not p.exists():
         raise FileNotFoundError(f"Solution file not found: {path}")
@@ -187,7 +183,7 @@ def read_cordeau_solution_file(path: str) -> CordeauSolution:
         raise ValueError("Empty solution file")
 
     objective = float(lines[0].split()[0])
-    routes: List[Route] = []
+    routes: List[ParsedRoute] = []
 
     for line in lines[1:]:
         parts = line.split()
@@ -206,7 +202,7 @@ def read_cordeau_solution_file(path: str) -> CordeauSolution:
             seq_items = seq_items[:-1]
 
         routes.append(
-            Route(
+            ParsedRoute(
                 depot=depot,
                 vehicle=vehicle,
                 duration=duration,

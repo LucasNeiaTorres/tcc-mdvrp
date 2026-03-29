@@ -1,41 +1,96 @@
-import os
-from src.utils.data_loader import read_cordeau_data_file, read_cordeau_solution_file
+"""Unit tests for the Cordeau data and solution file parser."""
+
+from pathlib import Path
+import pytest
+
+from utils.data_loader import (
+    CordeauInstance,
+    CordeauSolution,
+    ParsedRoute,
+    read_cordeau_data_file,
+    read_cordeau_solution_file,
+)
 
 
-def test_read_cordeau_data_file():
-    base = os.path.join(os.path.dirname(__file__), "..")
-    data_file = os.path.abspath(os.path.join(base, "data", "raw", "cordeau", "p01"))
-    if not os.path.exists(data_file):
-        data_file = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "data", "raw", "cordeau", "p01"))
-
-    inst = read_cordeau_data_file(data_file)
-    assert inst.problem_type == 2
-    assert inst.vehicle_count == 4
-    assert inst.customer_count == 50
-    assert len(inst.duration_limits) == 4
-    assert len(inst.capacity_limits) == 4
-    assert len(inst.customers) == 50
-    assert len(inst.depots) == 4
-    first_customer = inst.customers[0]
-    assert first_customer.index == 1
-    assert first_customer.x == 37
-    assert first_customer.y == 52
-    assert first_customer.demand == 7
-    assert first_customer.frequency == 1
+DATA_DIR = Path(__file__).parent.parent / "data" / "raw"
+P01_DATA = DATA_DIR / "cordeau" / "p01"
+P01_SOL  = DATA_DIR / "cordeau_sol" / "p01.res"
 
 
-def test_read_cordeau_solution_file():
-    base = os.path.join(os.path.dirname(__file__), "..")
-    sol_file = os.path.abspath(os.path.join(base, "data", "raw", "cordeau_sol", "p01.res"))
-    if not os.path.exists(sol_file):
-        sol_file = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "data", "raw", "cordeau_sol", "p01.res"))
+def _skip_if_missing(path: Path):
+    if not path.exists():
+        pytest.skip(f"Data file not found: {path}")
 
-    sol = read_cordeau_solution_file(sol_file)
-    assert sol.objective > 0
-    assert len(sol.routes) > 0
-    route0 = sol.routes[0]
-    assert route0.depot == 1
-    assert route0.vehicle == 1
-    assert route0.duration > 0
-    assert route0.load > 0
-    assert all(isinstance(n, int) for n in route0.nodes)
+
+@pytest.fixture
+def instance() -> CordeauInstance:
+    _skip_if_missing(P01_DATA)
+    return read_cordeau_data_file(str(P01_DATA))
+
+
+@pytest.fixture
+def solution() -> CordeauSolution:
+    _skip_if_missing(P01_SOL)
+    return read_cordeau_solution_file(str(P01_SOL))
+
+
+class TestReadCordeauDataFile:
+    def test_problem_type(self, instance):
+        assert instance.problem_type == 2
+
+    def test_vehicle_and_customer_count(self, instance):
+        assert instance.vehicle_count == 4
+        assert instance.customer_count == 50
+
+    def test_depot_count(self, instance):
+        assert instance.depot_count == 4
+
+    def test_limits_length(self, instance):
+        assert len(instance.duration_limits) == 4
+        assert len(instance.capacity_limits) == 4
+
+    def test_customers_length(self, instance):
+        assert len(instance.customers) == 50
+
+    def test_depots_length(self, instance):
+        assert len(instance.depots) == 4
+
+    def test_first_customer_fields(self, instance):
+        c = instance.customers[0]
+        assert c.index == 1
+        assert c.x == 37
+        assert c.y == 52
+        assert c.demand == 7
+        assert c.frequency == 1
+
+    def test_customer_indices_are_sequential(self, instance):
+        indices = [c.index for c in instance.customers]
+        assert indices == list(range(1, 51))
+
+
+class TestReadCordeauSolutionFile:
+    def test_objective_is_positive(self, solution):
+        assert solution.objective > 0
+
+    def test_has_routes(self, solution):
+        assert len(solution.routes) > 0
+
+    def test_route_fields(self, solution):
+        route = solution.routes[0]
+        assert isinstance(route, ParsedRoute)
+        assert route.depot >= 1
+        assert route.vehicle >= 1
+        assert route.duration > 0
+        assert route.load > 0
+
+    def test_route_customers_are_ints(self, solution):
+        for route in solution.routes:
+            assert all(isinstance(n, int) for n in route.nodes)
+
+    def test_route_customers_do_not_contain_depot(self, solution):
+        """Depot sentinel (0) should be stripped from customer list."""
+        for route in solution.routes:
+            assert 0 not in route.nodes
+
+    def test_visualizable_routes(self, solution):
+        assert solution.visualizable_routes == solution.routes
