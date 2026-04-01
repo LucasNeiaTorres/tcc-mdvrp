@@ -1,6 +1,8 @@
 from pathlib import Path
 
 from algorithms.greedy import GreedyAlgorithm
+from algorithms.ga_pso import GAPSOAlgorithm
+from utils.config import load_config
 from utils.converter import build_customers, build_depots
 from utils.data_loader import read_cordeau_data_file, read_cordeau_solution_file
 from utils.visualizer import visualize_instance, visualize_comparison
@@ -20,23 +22,30 @@ def main() -> None:
     customers = build_customers(instance)
     depots = build_depots(instance)
 
-    # Run greedy algorithm
-    algorithm = GreedyAlgorithm()
-    solution = algorithm.solve(customers, depots)
+    cfg = load_config()
 
-    print(f"Algorithm   : {algorithm}")
-    print(f"Total cost  : {solution.total_cost():.2f}")
-    print(f"Feasible    : {solution.is_feasible()}")
+    # Run greedy algorithm
+    greedy = GreedyAlgorithm()
+    greedy_solution = greedy.solve(customers, depots)
+
+    # Run GA+PSO algorithm
+    ga_pso = GAPSOAlgorithm(cfg)
+    ga_pso_solution = ga_pso.solve(customers, depots)
+
     print(f"Reference   : {reference_solution.objective:.2f}")
+    print(f"{greedy}  cost: {greedy_solution.total_cost():.2f}  feasible: {greedy_solution.is_feasible()}")
+    print(f"{ga_pso}")
+    print(f"  cost: {ga_pso_solution.total_cost():.2f}  feasible: {ga_pso_solution.is_feasible()}")
 
     # Visualize
     visualize_instance(instance)
     visualize_comparison(
         instance,
-        [reference_solution, solution],
+        [reference_solution, greedy_solution, ga_pso_solution],
         titles=[
             f"Reference (obj: {reference_solution.objective:.2f})",
-            f"Greedy (cost: {solution.total_cost():.2f})",
+            f"Greedy (cost: {greedy_solution.total_cost():.2f})",
+            f"GA+PSO (cost: {ga_pso_solution.total_cost():.2f})",
         ],
     )
 

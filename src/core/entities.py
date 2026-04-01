@@ -6,7 +6,7 @@ from typing import List
 from utils.metrics import euclidean_distance
 
 
-@dataclass
+@dataclass(frozen=True)
 class Customer:
     index: int
     x: float
@@ -15,7 +15,7 @@ class Customer:
     service_time: float
 
 
-@dataclass
+@dataclass(frozen=True)
 class Depot:
     index: int
     x: float

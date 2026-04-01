@@ -1,0 +1,16 @@
+ga:
+  pop_size: 100
+  n_gen: 200
+  capacity_penalty: 10000.0
+  crossover_prob: 0.9
+  mutation_eta: 20
+  seed: 42
+
+pso:
+  pop_size: 50
+  n_gen: 200
+  inertia: 0.9
+  c1: 2.0
+  c2: 2.0
+  adaptive: true
+  seed: 42
