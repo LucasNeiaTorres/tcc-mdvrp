@@ -129,7 +129,7 @@ class TestRoutingProblem:
     def test_evaluate_returns_round_trip_cost(self, depots, dist_fn):
         depot = depots[0]
         route_customers = [
-            Customer(index=1, x=3.0, y=4.0, demand=5, service_time=0),
+            Customer(index=101, x=3.0, y=4.0, demand=5, service_time=0),
         ]
         nodes = {depot.index: (depot.x, depot.y)}
         nodes.update({c.index: (c.x, c.y) for c in route_customers})
@@ -206,6 +206,30 @@ class TestGAPSOAlgorithm:
         algo = GAPSOAlgorithm(app_cfg)
         solution = algo.solve(customers, depots)
         assert solution.total_cost() > 0
+
+    def test_single_depot_can_use_multiple_vehicles(self, app_cfg):
+        depot = Depot(
+            index=1,
+            x=0.0,
+            y=0.0,
+            max_duration=0.0,
+            max_capacity=20,
+            max_vehicles=2,
+        )
+        customers = [
+            Customer(index=101, x=1.0, y=0.0, demand=10, service_time=0),
+            Customer(index=102, x=2.0, y=0.0, demand=10, service_time=0),
+            Customer(index=103, x=3.0, y=0.0, demand=10, service_time=0),
+            Customer(index=104, x=4.0, y=0.0, demand=10, service_time=0),
+        ]
+
+        algo = GAPSOAlgorithm(app_cfg)
+        solution = algo.solve(customers, [depot])
+
+        assert len(solution.routes) == 2
+        assert all(route.depot.index == depot.index for route in solution.routes)
+        assert sum(len(route.customers) for route in solution.routes) == len(customers)
+        assert all(route.total_demand() <= depot.max_capacity for route in solution.routes)
 
 
 # ---------------------------------------------------------------------------

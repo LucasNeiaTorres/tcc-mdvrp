@@ -20,8 +20,17 @@ class Solution:
         return sum(route.total_distance() for route in self.routes)
 
     def is_feasible(self) -> bool:
-        """True if every route in the solution satisfies its constraints."""
-        return all(route.is_feasible() for route in self.routes)
+        """True if route constraints and per-depot vehicle limits are satisfied."""
+        per_depot_count: Dict[int, int] = {}
+        for route in self.routes:
+            per_depot_count[route.depot.index] = per_depot_count.get(route.depot.index, 0) + 1
+
+        routes_ok = all(route.is_feasible() for route in self.routes)
+        fleet_ok = all(
+            per_depot_count.get(route.depot.index, 0) <= route.depot.max_vehicles
+            for route in self.routes
+        )
+        return routes_ok and fleet_ok
 
     @property
     def visualizable_routes(self) -> List[Route]:
@@ -35,6 +44,9 @@ class Solution:
             report[i] = {
                 "depot": route.depot.index,
                 "customers": [c.index for c in route.customers],
+                "routes_for_depot": sum(1 for r in self.routes if r.depot.index == route.depot.index),
+                "max_vehicles": route.depot.max_vehicles,
+                "fleet_ok": sum(1 for r in self.routes if r.depot.index == route.depot.index) <= route.depot.max_vehicles,
                 "demand": route.total_demand(),
                 "max_capacity": route.depot.max_capacity,
                 "capacity_ok": route.total_demand() <= route.depot.max_capacity,

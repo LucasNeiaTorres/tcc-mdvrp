@@ -55,10 +55,15 @@ class TestBuildDepots:
     def test_count(self, instance):
         assert len(build_depots(instance)) == 2
 
-    def test_index_is_one_based_position(self, instance):
+    def test_index_uses_original_node_id(self, instance):
         depots = build_depots(instance)
-        assert depots[0].index == 1
-        assert depots[1].index == 2
+        assert depots[0].index == 3
+        assert depots[1].index == 4
+
+    def test_slot_index_is_one_based_position(self, instance):
+        depots = build_depots(instance)
+        assert depots[0].slot_index == 1
+        assert depots[1].slot_index == 2
 
     def test_coordinates(self, instance):
         depots = build_depots(instance)
@@ -73,3 +78,8 @@ class TestBuildDepots:
         assert depots[0].max_capacity == 50
         assert depots[1].max_duration == 80.0
         assert depots[1].max_capacity == 40
+
+    def test_vehicle_count_is_propagated_to_each_depot(self, instance):
+        depots = build_depots(instance)
+        assert depots[0].max_vehicles == 4
+        assert depots[1].max_vehicles == 4

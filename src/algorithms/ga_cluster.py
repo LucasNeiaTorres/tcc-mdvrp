@@ -15,7 +15,7 @@ assigned depot inside the ``depots`` list.  This keeps the bounds
 Fitness
 -------
     f(x) = Σ dist(customer_i, depots[x[i]])
-           + capacity_penalty × Σ max(0, load[depot] − depot.max_capacity)
+           + capacity_penalty × Σ max(0, load[depot] − depot.max_capacity × depot.max_vehicles)
 
 The capacity penalty turns a hard constraint into a soft one: solutions that
 violate capacity are still explored but are strongly discouraged.
@@ -79,13 +79,13 @@ class DepotAssignmentProblem(ElementwiseProblem):
             for i in range(len(self.customers))
         )
 
-        # Capaciy penalty: accumulate load per depot slot
+        # Capacity penalty: accumulate load per depot slot
         loads: Dict[int, float] = {i: 0.0 for i in range(len(self.depots))}
         for i, slot in enumerate(x):
             loads[slot] += self.customers[i].demand
 
         penalty = self.capacity_penalty * sum(
-            max(0.0, loads[i] - self.depots[i].max_capacity)
+            max(0.0, loads[i] - (self.depots[i].max_capacity * self.depots[i].max_vehicles))
             for i in range(len(self.depots))
         )
 

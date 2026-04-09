@@ -26,8 +26,16 @@ class MDVRPAlgorithm(ABC):
 
     def _dist(self, a_index: int, b_index: int) -> float:
         """O(1) distance lookup between any two node indices."""
-        a_row = self._depot_offset.get(a_index, self._customer_offset[a_index])
-        b_row = self._depot_offset.get(b_index, self._customer_offset[b_index])
+        if a_index in self._depot_offset:
+            a_row = self._depot_offset[a_index]
+        else:
+            a_row = self._customer_offset[a_index]
+
+        if b_index in self._depot_offset:
+            b_row = self._depot_offset[b_index]
+        else:
+            b_row = self._customer_offset[b_index]
+
         return self._dist_matrix[a_row][b_row]
 
     @abstractmethod
