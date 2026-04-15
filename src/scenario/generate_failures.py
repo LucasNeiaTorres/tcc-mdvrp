@@ -6,18 +6,26 @@ import argparse
 import json
 import random
 import sys
-from dataclasses import asdict, dataclass
+from dataclasses import asdict
 from datetime import date
 from pathlib import Path
 from typing import List
 
 try:
+	from src.scenario.models import FailureEvent
 	from utils.data_loader import read_cordeau_data_file
 except ModuleNotFoundError:
 	# Allow direct execution: python src/scenario/generate_failures.py
+	repo_root = Path(__file__).resolve().parents[2]
 	src_dir = Path(__file__).resolve().parents[1]
+	if str(repo_root) not in sys.path:
+		sys.path.insert(0, str(repo_root))
 	if str(src_dir) not in sys.path:
 		sys.path.insert(0, str(src_dir))
+	try:
+		from src.scenario.models import FailureEvent
+	except ModuleNotFoundError:
+		from scenario.models import FailureEvent
 	from utils.data_loader import read_cordeau_data_file
 
 # Example usage:
@@ -31,22 +39,14 @@ python3 src/scenario/generate_failures.py \
 This will generate a scenario with 3 random edge-block events for instance p01, with trigger times between 0 and 120 minutes, and save it to data/processed/failures/p01_seed42.json.   
 """
 
-@dataclass(frozen=True)
-class Event:
-	trigger_time: float
-	type: str
-	node_a: int
-	node_b: int
-
-
 def _default_data_file(instance: str) -> Path:
 	base_dir = Path(__file__).resolve().parents[2]
 	return base_dir / "data" / "raw" / "cordeau" / instance
 
 
-def _default_output_file(instance: str, seed: int) -> Path:
+def _default_output_file(instance: str, seed: int, n_events: int    ) -> Path:
 	base_dir = Path(__file__).resolve().parents[2]
-	return base_dir / "data" / "processed" / "failures" / f"{instance}_seed{seed}.json"
+	return base_dir / "data" / "processed" / "failures" / f"{instance}_seed{seed}_events{n_events}.json"
 
 
 def generate_events(
@@ -54,7 +54,7 @@ def generate_events(
 	rng: random.Random,
 	n_events: int,
 	max_time: float,
-) -> List[Event]:
+) -> List[FailureEvent]:
 	"""Generate sorted edge_block events with random trigger times and node pairs."""
 	if n_events < 1:
 		raise ValueError("n_events must be >= 1")
@@ -63,12 +63,12 @@ def generate_events(
 	if len(node_ids) < 2:
 		raise ValueError("Need at least 2 nodes to generate edge events")
 
-	events: List[Event] = []
+	events: List[FailureEvent] = []
 	for _ in range(n_events):
 		node_a, node_b = rng.sample(node_ids, 2)
 		trigger_time = round(rng.uniform(0.0, max_time), 1)
 		events.append(
-			Event(
+			FailureEvent(
 				trigger_time=trigger_time,
 				type="edge_block",
 				node_a=node_a,
@@ -80,7 +80,7 @@ def generate_events(
 	return events
 
 
-def build_payload(instance: str, seed: int, severity: str, events: List[Event]) -> dict:
+def build_payload(instance: str, seed: int, severity: str, events: List[FailureEvent]) -> dict:
 	"""Build the JSON payload in the requested schema."""
 	return {
 		"metadata": {
@@ -128,7 +128,7 @@ def parse_args() -> argparse.Namespace:
 def main() -> None:
 	args = parse_args()
 	data_file = args.data_file or _default_data_file(args.instance)
-	output_file = args.output or _default_output_file(args.instance, args.seed)
+	output_file = args.output or _default_output_file(args.instance, args.seed, args.events)
 
 	instance = read_cordeau_data_file(str(data_file))
 	node_ids = [customer.index for customer in instance.customers]

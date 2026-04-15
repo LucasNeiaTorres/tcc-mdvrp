@@ -4,7 +4,7 @@ from algorithms.greedy import GreedyAlgorithm
 from algorithms.ga_pso import GAPSOAlgorithm
 from utils.config import load_config
 from utils.converter import build_customers, build_depots
-from utils.data_loader import read_cordeau_data_file, read_cordeau_solution_file
+from utils.data_loader import read_cordeau_data_file, read_cordeau_solution_file, read_failures_file
 from utils.visualizer import visualize_instance, visualize_comparison
 
 
@@ -13,10 +13,12 @@ def main() -> None:
     base_dir = Path(__file__).parent.parent
     data_file = base_dir / "data" / "raw" / "cordeau" / "p01"
     solution_file = base_dir / "data" / "raw" / "cordeau_sol" / "p01.res"
+    failures_file = base_dir / "data" / "processed" / "failures" / "p01_seed41.json"
 
     # Load raw instance and reference solution
     instance = read_cordeau_data_file(str(data_file))
     reference_solution = read_cordeau_solution_file(str(solution_file))
+    events = read_failures_file(str(failures_file))
 
     # Build domain entities
     customers = build_customers(instance)

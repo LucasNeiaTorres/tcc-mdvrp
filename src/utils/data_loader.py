@@ -1,6 +1,22 @@
+import json
 from dataclasses import dataclass, field
 from pathlib import Path
+import sys
 from typing import List, Optional, Tuple
+
+try:
+    from src.scenario.models import FailureEvent
+except ModuleNotFoundError:
+    repo_root = Path(__file__).resolve().parents[2]
+    src_dir = Path(__file__).resolve().parents[1]
+    if str(repo_root) not in sys.path:
+        sys.path.insert(0, str(repo_root))
+    if str(src_dir) not in sys.path:
+        sys.path.insert(0, str(src_dir))
+    try:
+        from src.scenario.models import FailureEvent
+    except ModuleNotFoundError:
+        from scenario.models import FailureEvent
 
 @dataclass
 class VisitCombination:
@@ -212,3 +228,34 @@ def read_cordeau_solution_file(path: str) -> CordeauSolution:
         )
 
     return CordeauSolution(objective=objective, routes=routes)
+
+def read_failures_file(path: str) -> List[FailureEvent]:
+    """
+    Read failure events from JSON.
+
+    Supported formats:
+    1) {"metadata": {...}, "events": [...]} (current)
+    2) [...] (legacy list-only)
+    """
+    p = Path(path)
+    if not p.exists():
+        raise FileNotFoundError(f"Failures file not found: {path}")
+
+    with p.open("r", encoding="utf-8") as f:
+        data = json.load(f)
+
+    items = data.get("events", data) if isinstance(data, dict) else data
+    if not isinstance(items, list):
+        raise ValueError("Invalid failures JSON: expected a list or an object with an 'events' list")
+
+    events: List[FailureEvent] = []
+    for item in items:
+        events.append(
+            FailureEvent(
+                trigger_time=float(item["trigger_time"]),
+                type=str(item["type"]),
+                node_a=int(item["node_a"]),
+                node_b=int(item["node_b"]),
+            )
+        )
+    return events
