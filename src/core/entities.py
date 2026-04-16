@@ -23,7 +23,6 @@ class Depot:
     max_duration: float
     max_capacity: float
     max_vehicles: int = 1
-    slot_index: int = 0
 
 
 @dataclass
@@ -65,7 +64,7 @@ class Route:
     @property
     def depot_index(self) -> int:
         """1-based depot number, satisfies VisualizableRoute protocol."""
-        return self.depot.slot_index if self.depot.slot_index > 0 else self.depot.index
+        return self.depot.index
 
     @property
     def customer_indices(self) -> List[int]:

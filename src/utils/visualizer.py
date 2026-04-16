@@ -20,20 +20,6 @@ def _node_positions(instance: CordeauInstance) -> dict:
     return positions
 
 
-def _depot_position_by_slot(instance: CordeauInstance, depot_index: int):
-    """
-    Map a 1-based depot slot number to (x, y).
-
-    ``depot_index`` is the 1-based position inside ``instance.depots``
-    (as stored in ``ParsedRoute.depot`` and ``Depot.index`` set by the
-    converter).
-    """
-    idx = depot_index - 1
-    if not (0 <= idx < len(instance.depots)):
-        return None
-    return instance.depots[idx].x, instance.depots[idx].y
-
-
 def _draw_routes(ax, instance: CordeauInstance, solution: VisualizableSolution) -> None:
     """Draw all routes of *solution* onto *ax*."""
     routes = solution.visualizable_routes
@@ -42,7 +28,7 @@ def _draw_routes(ax, instance: CordeauInstance, solution: VisualizableSolution) 
     for route_idx, route in enumerate(routes):
         color = colors[route_idx % len(colors)]
 
-        depot_pos = _depot_position_by_slot(instance, route.depot_index)
+        depot_pos = _node_positions(instance).get(route.depot_index)
         if depot_pos is None:
             continue
 

@@ -23,9 +23,6 @@ def build_customers(instance: CordeauInstance) -> List[Customer]:
 def build_depots(instance: CordeauInstance) -> List[Depot]:
     """
     Build a list of Depot entities from a parsed CordeauInstance.
-    ``Depot.index`` keeps the original node index from the data file to avoid
-    collisions with customer indices in distance lookups.
-    ``slot_index`` keeps the 1-based depot position used by visualisation.
     """
     return [
         Depot(
@@ -35,7 +32,6 @@ def build_depots(instance: CordeauInstance) -> List[Depot]:
             max_duration=instance.duration_limits[depot_number - 1],
             max_capacity=instance.capacity_limits[depot_number - 1],
             max_vehicles=instance.vehicle_count,
-            slot_index=depot_number,
         )
         for depot_number, node in enumerate(instance.depots, start=1)
     ]

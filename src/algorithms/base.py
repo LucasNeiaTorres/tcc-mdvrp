@@ -13,30 +13,19 @@ class MDVRPAlgorithm(ABC):
 
     # Set by _build_matrix() before solve logic runs
     _dist_matrix: List[List[float]]
-    _depot_offset: Dict[int, int]    # depot.index → row in matrix
-    _customer_offset: Dict[int, int]  # customer.index → row in matrix
+    _node_offset: Dict[int, int]  # node.index → row in matrix
 
     def _build_matrix(self, depots: List[Depot], customers: List[Customer]) -> None:
         """Pre-compute the distance matrix and index maps for O(1) lookups."""
         self._dist_matrix = build_distance_matrix(depots, customers)
-        self._depot_offset = {d.index: i for i, d in enumerate(depots)}
-        self._customer_offset = {
-            c.index: len(depots) + i for i, c in enumerate(customers)
+        self._node_offset = {
+            **{d.index: i for i, d in enumerate(depots)},
+            **{c.index: len(depots) + i for i, c in enumerate(customers)},
         }
 
     def _dist(self, a_index: int, b_index: int) -> float:
         """O(1) distance lookup between any two node indices."""
-        if a_index in self._depot_offset:
-            a_row = self._depot_offset[a_index]
-        else:
-            a_row = self._customer_offset[a_index]
-
-        if b_index in self._depot_offset:
-            b_row = self._depot_offset[b_index]
-        else:
-            b_row = self._customer_offset[b_index]
-
-        return self._dist_matrix[a_row][b_row]
+        return self._dist_matrix[self._node_offset[a_index]][self._node_offset[b_index]]
 
     @abstractmethod
     def solve(self, customers: List[Customer], depots: List[Depot]) -> Solution:

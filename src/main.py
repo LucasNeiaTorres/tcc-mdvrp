@@ -16,7 +16,7 @@ def main() -> None:
 
     # Load raw instance and reference solution
     instance = read_cordeau_data_file(str(data_file))
-    reference_solution = read_cordeau_solution_file(str(solution_file))
+    reference_solution = read_cordeau_solution_file(str(solution_file), instance)
 
     # Build domain entities
     customers = build_customers(instance)
@@ -25,15 +25,15 @@ def main() -> None:
     cfg = load_config()
 
     # Run greedy algorithm
-    greedy = GreedyAlgorithm()
-    greedy_solution = greedy.solve(customers, depots)
+    # greedy = GreedyAlgorithm()
+    # greedy_solution = greedy.solve(customers, depots)
 
     # Run GA+PSO algorithm
     ga_pso = GAPSOAlgorithm(cfg)
     ga_pso_solution = ga_pso.solve(customers, depots)
 
     print(f"Reference   : {reference_solution.objective:.2f}")
-    print(f"{greedy}  cost: {greedy_solution.total_cost():.2f}  feasible: {greedy_solution.is_feasible()}")
+    # print(f"{greedy}  cost: {greedy_solution.total_cost():.2f}  feasible: {greedy_solution.is_feasible()}")
     print(f"{ga_pso}")
     print(f"  cost: {ga_pso_solution.total_cost():.2f}  feasible: {ga_pso_solution.is_feasible()}")
 
@@ -41,10 +41,11 @@ def main() -> None:
     visualize_instance(instance)
     visualize_comparison(
         instance,
-        [reference_solution, greedy_solution, ga_pso_solution],
+        # [reference_solution, greedy_solution, ga_pso_solution],
+        [reference_solution, ga_pso_solution],
         titles=[
             f"Reference (obj: {reference_solution.objective:.2f})",
-            f"Greedy (cost: {greedy_solution.total_cost():.2f})",
+            # f"Greedy (cost: {greedy_solution.total_cost():.2f})",
             f"GA+PSO (cost: {ga_pso_solution.total_cost():.2f})",
         ],
     )

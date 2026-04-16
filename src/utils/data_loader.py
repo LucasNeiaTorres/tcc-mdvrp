@@ -170,8 +170,16 @@ def read_cordeau_data_file(path: str) -> CordeauInstance:
     )
 
 
-def read_cordeau_solution_file(path: str) -> CordeauSolution:
-    """Read a Cordeau MDVRP solution file."""
+def read_cordeau_solution_file(
+    path: str,
+    instance: Optional["CordeauInstance"] = None,
+) -> CordeauSolution:
+    """Read a Cordeau MDVRP solution file.
+
+    If *instance* is provided, the 1-based depot numbers in the solution file
+    are translated to the raw node indices used by the instance, so that
+    ``ParsedRoute.depot_index`` is consistent with ``Depot.index``.
+    """
     p = Path(path)
     if not p.exists():
         raise FileNotFoundError(f"Solution file not found: {path}")
@@ -190,7 +198,7 @@ def read_cordeau_solution_file(path: str) -> CordeauSolution:
         if len(parts) < 5:
             raise ValueError(f"Invalid route line: {line}")
 
-        depot = int(parts[0])
+        depot_number = int(parts[0])
         vehicle = int(parts[1])
         duration = float(parts[2])
         load = float(parts[3])
@@ -201,9 +209,14 @@ def read_cordeau_solution_file(path: str) -> CordeauSolution:
         if seq_items and seq_items[-1] == 0:
             seq_items = seq_items[:-1]
 
+        if instance is not None:
+            depot_node_index = instance.depots[depot_number - 1].index
+        else:
+            depot_node_index = depot_number
+
         routes.append(
             ParsedRoute(
-                depot=depot,
+                depot=depot_node_index,
                 vehicle=vehicle,
                 duration=duration,
                 load=load,
