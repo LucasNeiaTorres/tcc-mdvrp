@@ -175,14 +175,13 @@ class TestRoutingProblem:
 
 class TestRunPSORouting:
     def test_empty_cluster(self, depots, pso_cfg, dist_fn):
-        route = run_pso_routing(depots[0], [], dist_fn, pso_cfg)
-        assert isinstance(route, Route)
-        assert route.customers == []
+        routes = run_pso_routing(depots[0], [], dist_fn, pso_cfg)
+        assert routes == []
 
     def test_single_customer(self, depots, customers, pso_cfg, dist_fn):
-        route = run_pso_routing(depots[0], [customers[0]], dist_fn, pso_cfg)
-        assert len(route.customers) == 1
-        assert route.customers[0].index == customers[0].index
+        routes = run_pso_routing(depots[0], [customers[0]], dist_fn, pso_cfg)
+        assert len(routes) == 1
+        assert routes[0].customers[0].index == customers[0].index
 
 
 # ---------------------------------------------------------------------------

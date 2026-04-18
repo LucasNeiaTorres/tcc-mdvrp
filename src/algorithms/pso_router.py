@@ -2,8 +2,8 @@
 PSO-based routing module for MDVRP.
 
 Solves the route-optimisation sub-problem: given a depot and a fixed set of
-customers already assigned to it, find the visiting order that minimises the
-total travel distance of the round-trip.
+customers already assigned to it, find both the visiting order and the vehicle
+partition that minimise total travel distance.
 
 SPV encoding (Smallest Position Value)
 ---------------------------------------
@@ -15,11 +15,18 @@ obtained by ranking (argsort) the position vector:
 This avoids any custom operator and is a well-established technique for
 permutation problems in continuous-space swarms.
 
+Bellman split
+-------------
+For each candidate permutation the fitness is computed by the Bellman (DAG
+shortest-path) split algorithm (Prins, 2004).  The PSO therefore co-optimises
+both the visiting order and the vehicle boundaries.
+
 Fitness
 -------
-    f(x) = dist(depot, customers[perm[0]])
-           + Σ dist(customers[perm[i]], customers[perm[i+1]])
-           + dist(customers[perm[-1]], depot)
+    f(x) = min-cost partition of the giant tour into capacity-feasible routes
+           = Σ_k [ dist(depot, r_k[0])
+                   + Σ dist(r_k[i], r_k[i+1])
+                   + dist(r_k[-1], depot) ]
 """
 
 from typing import Callable, List
@@ -31,6 +38,58 @@ from pymoo.optimize import minimize
 
 from core.entities import Customer, Depot, Route
 from utils.config import PSOConfig
+
+
+def bellman_split(
+    ordered: List[Customer],
+    depot: Depot,
+    dist_fn: Callable[[int, int], float],
+) -> List[List[Customer]]:
+    """
+    Optimally partition an ordered customer sequence into capacity-feasible
+    vehicle routes using the Bellman (DAG shortest-path) split algorithm.
+
+    Each contiguous segment becomes one vehicle route
+    ``depot → seg[0] → ... → seg[-1] → depot``.  The DP finds the cut points
+    that minimise total travel distance subject to each segment's total demand
+    not exceeding ``depot.max_capacity``.
+
+    Customers whose individual demand exceeds capacity are placed in their own
+    route so that all customers are always routed.
+    """
+    n = len(ordered)
+    INF = float("inf")
+    dp = [INF] * (n + 1)
+    pred = [-1] * (n + 1)
+    dp[0] = 0.0
+
+    for i in range(n):
+        if dp[i] == INF:
+            continue
+        load = 0.0
+        prev_idx = depot.index
+        travel = 0.0
+        for j in range(i, n):
+            load += ordered[j].demand
+            # Allow singleton segments even when demand exceeds capacity.
+            if load > depot.max_capacity and j > i:
+                break
+            travel += dist_fn(prev_idx, ordered[j].index)
+            prev_idx = ordered[j].index
+            total = dp[i] + travel + dist_fn(ordered[j].index, depot.index)
+            if total < dp[j + 1]:
+                dp[j + 1] = total
+                pred[j + 1] = i
+
+    # Backtrack from n to 0 to recover segments.
+    segments: List[List[Customer]] = []
+    j = n
+    while j > 0:
+        i = pred[j]
+        segments.append(list(ordered[i:j]))
+        j = i
+    segments.reverse()
+    return segments
 
 
 class RoutingProblem(ElementwiseProblem):
@@ -67,13 +126,16 @@ class RoutingProblem(ElementwiseProblem):
     def _evaluate(self, x: np.ndarray, out: dict, *args, **kwargs) -> None:
         perm = np.argsort(x)
         ordered = [self.customers[i] for i in perm]
+        segments = bellman_split(ordered, self.depot, self.dist_fn)
 
-        cost = self.dist_fn(self.depot.index, ordered[0].index)
-        for i in range(len(ordered) - 1):
-            cost += self.dist_fn(ordered[i].index, ordered[i + 1].index)
-        cost += self.dist_fn(ordered[-1].index, self.depot.index)
+        total = 0.0
+        for seg in segments:
+            total += self.dist_fn(self.depot.index, seg[0].index)
+            for i in range(len(seg) - 1):
+                total += self.dist_fn(seg[i].index, seg[i + 1].index)
+            total += self.dist_fn(seg[-1].index, self.depot.index)
 
-        out["F"] = cost
+        out["F"] = total
 
 
 def run_pso_routing(
@@ -81,16 +143,17 @@ def run_pso_routing(
     customers: List[Customer],
     dist_fn: Callable[[int, int], float],
     cfg: PSOConfig,
-) -> Route:
+) -> List[Route]:
     """
-    Run PSO to find the best visiting order for a cluster of customers.
+    Run PSO to find the best visiting order for a depot's customers, then use
+    the Bellman split to partition the giant tour into capacity-feasible routes.
 
     Parameters
     ----------
     depot:
         Depot that serves this cluster.
     customers:
-        Customers assigned to this depot (to be ordered).
+        All customers assigned to this depot.
     dist_fn:
         Pre-computed O(1) distance callable from ``MDVRPAlgorithm._dist``.
     cfg:
@@ -98,13 +161,13 @@ def run_pso_routing(
 
     Returns
     -------
-    A Route with customers in the optimised visiting order.
+    List of Routes covering all customers, one per vehicle.
     """
     if not customers:
-        return Route(depot=depot)
+        return []
 
     if len(customers) == 1:
-        return Route(depot=depot, customers=list(customers))
+        return [Route(depot=depot, customers=list(customers))]
 
     problem = RoutingProblem(depot=depot, customers=customers, dist_fn=dist_fn)
 
@@ -126,4 +189,5 @@ def run_pso_routing(
 
     perm = np.argsort(result.X)
     ordered_customers = [customers[i] for i in perm]
-    return Route(depot=depot, customers=ordered_customers)
+    segments = bellman_split(ordered_customers, depot, dist_fn)
+    return [Route(depot=depot, customers=seg) for seg in segments]
