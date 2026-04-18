@@ -7,6 +7,7 @@ from utils.converter import build_customers, build_depots
 from utils.data_loader import read_cordeau_data_file, read_cordeau_solution_file, read_failures_file
 from utils.results_io import save_clustering_result, save_routing_result
 from utils.visualizer import visualize_instance, visualize_comparison
+from scenario.simulator import run_simulation
 
 
 def main() -> None:
@@ -19,7 +20,7 @@ def main() -> None:
     # Load raw instance and reference solution
     instance = read_cordeau_data_file(str(data_file))
     reference_solution = read_cordeau_solution_file(str(solution_file), instance)
-    events = read_failures_file(str(failures_file))
+    failures = read_failures_file(str(failures_file))
 
     # Build domain entities
     customers = build_customers(instance)
@@ -50,6 +51,13 @@ def main() -> None:
         instance_name=data_file.name,
         algorithm_name=str(ga_pso),
         solution=ga_pso_solution,
+    )
+    
+    run_simulation(
+        # instance=instance,
+        initial_solution=ga_pso_solution,
+        failures=failures,
+        # output_dir=base_dir / "data" / "processed" / "simulations" / data_file.name,
     )
 
     print(f"Reference   : {reference_solution.objective:.2f}")
