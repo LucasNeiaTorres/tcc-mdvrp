@@ -29,9 +29,9 @@ def instance() -> CordeauInstance:
 
 
 @pytest.fixture
-def solution() -> CordeauSolution:
+def solution(instance: CordeauInstance) -> CordeauSolution:
     _skip_if_missing(P01_SOL)
-    return read_cordeau_solution_file(str(P01_SOL))
+    return read_cordeau_solution_file(str(P01_SOL), instance)
 
 
 class TestReadCordeauDataFile:
@@ -75,10 +75,10 @@ class TestReadCordeauSolutionFile:
     def test_has_routes(self, solution):
         assert len(solution.routes) > 0
 
-    def test_route_fields(self, solution):
+    def test_route_fields(self, solution, instance):
         route = solution.routes[0]
         assert isinstance(route, ParsedRoute)
-        assert route.depot >= 1
+        assert route.depot in {d.index for d in instance.depots}
         assert route.vehicle >= 1
         assert route.duration > 0
         assert route.load > 0

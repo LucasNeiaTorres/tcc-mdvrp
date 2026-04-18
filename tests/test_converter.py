@@ -60,11 +60,6 @@ class TestBuildDepots:
         assert depots[0].index == 3
         assert depots[1].index == 4
 
-    def test_slot_index_is_one_based_position(self, instance):
-        depots = build_depots(instance)
-        assert depots[0].slot_index == 1
-        assert depots[1].slot_index == 2
-
     def test_coordinates(self, instance):
         depots = build_depots(instance)
         assert depots[0].x == 0.0
