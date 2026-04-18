@@ -45,18 +45,24 @@ class GAPSOAlgorithm(ClusterFirstAlgorithm):
         if cfg is None:
             cfg = load_config()
         self.cfg = cfg
+        self.last_clusters: Dict[int, List[int]] = {}
 
 
     def cluster(
         self, customers: List[Customer], depots: List[Depot]
     ) -> Dict[Depot, List[Customer]]:
         """Phase 1: assign customers to depots via GA."""
-        return run_ga_clustering(
+        clusters = run_ga_clustering(
             customers=customers,
             depots=depots,
             dist_fn=self._dist,
             cfg=self.cfg.ga,
         )
+        self.last_clusters = {
+            depot.index: [customer.index for customer in assigned]
+            for depot, assigned in clusters.items()
+        }
+        return clusters
 
     def route(self, clusters: Dict[Depot, List[Customer]]) -> Solution:
         """Phase 2: optimise visiting order per depot via PSO."""
