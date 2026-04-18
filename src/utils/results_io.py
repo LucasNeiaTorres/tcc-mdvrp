@@ -67,7 +67,6 @@ def save_routing_result(
             {
                 "route_id": route_idx,
                 "depot_index": route.depot.index,
-                "depot_slot_index": route.depot.slot_index,
                 "customer_indices": [c.index for c in route.customers],
                 "total_demand": route.total_demand(),
                 "total_distance": route.total_distance(),
@@ -124,7 +123,6 @@ def save_clustering_and_routing(
             {
                 "route_id": route_idx,
                 "depot_index": route.depot.index,
-                "depot_slot_index": route.depot.slot_index,
                 "customer_indices": [c.index for c in route.customers],
                 "total_demand": route.total_demand(),
                 "total_distance": route.total_distance(),
