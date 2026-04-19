@@ -8,6 +8,7 @@ from typing import Any, List, Tuple
 from core.entities import Customer, Depot
 from core.solution import Solution
 from utils.metrics import euclidean_distance
+from utils.results_io import save_history_log
 from .models import FailureEvent
 
 SPEED_KMH = 50.0
@@ -118,7 +119,7 @@ def pop_next_event(queue: List[QueueItem]) -> SimulationEvent | None:
     _, _, event = heapq.heappop(queue)
     return event
 
-def run_simulation(initial_solution: Solution, failures: List[FailureEvent]):
+def run_simulation(initial_solution: Solution, failures: List[FailureEvent], instance_name: str):
     queue = generate_event_queue(initial_solution, failures)
     
     history_log = []
@@ -133,5 +134,11 @@ def run_simulation(initial_solution: Solution, failures: List[FailureEvent]):
         current_time = event.trigger_time
         history_log.append((current_time, event.type, event.payload))
     
-    # Salva json do historico   
+    
+    # Salva json do historico  
+    output_path = f"data/processed/simulation_logs/{instance_name}_log.json"
+    save_history_log(output_path, instance_name, history_log)
+    print(f"Saved simulation log to {output_path}")
+    
+    return history_log
     

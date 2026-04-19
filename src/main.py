@@ -57,6 +57,7 @@ def main() -> None:
         # instance=instance,
         initial_solution=ga_pso_solution,
         failures=failures,
+        instance_name=data_file.name,
         # output_dir=base_dir / "data" / "processed" / "simulations" / data_file.name,
     )
 

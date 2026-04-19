@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 from datetime import datetime
 from pathlib import Path
-from typing import Dict
+from typing import Any, Dict, List, Tuple
 
 from core.solution import Solution
 
@@ -131,6 +131,50 @@ def save_clustering_and_routing(
             }
             for route_idx, route in enumerate(solution.routes, start=1)
         ],
+    }
+
+    with out.open("w", encoding="utf-8") as f:
+        json.dump(payload, f, indent=2, ensure_ascii=True)
+        f.write("\n")
+
+    return out
+
+def save_history_log(
+    output_path: str,
+    instance_name: str,
+    history_log: List[Tuple[float, str, Dict[str, Any]]],
+) -> Path:
+    """Save simulation event history to JSON."""
+    out = Path(output_path)
+    out.parent.mkdir(parents=True, exist_ok=True)
+
+    # Count events by type
+    event_counts: Dict[str, int] = {}
+    for _, event_type, _ in history_log:
+        event_counts[event_type] = event_counts.get(event_type, 0) + 1
+
+    # Serialize events
+    events_payload = [
+        {
+            "time_minutes": time,
+            "type": event_type,
+            "payload": payload,
+        }
+        for time, event_type, payload in history_log
+    ]
+
+    # Build payload
+    payload = {
+        "metadata": {
+            "instance": instance_name,
+            "generated_at": datetime.now().isoformat(timespec="seconds"),
+        },
+        "summary": {
+            "total_events": len(history_log),
+            "event_counts_by_type": event_counts,
+            "total_time_minutes": history_log[-1][0] if history_log else 0.0,
+        },
+        "events": events_payload,
     }
 
     with out.open("w", encoding="utf-8") as f:
