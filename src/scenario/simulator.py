@@ -133,6 +133,12 @@ def run_simulation(initial_solution: Solution, failures: List[FailureEvent], ins
         print(f"Processing event: time={event.trigger_time:.2f}, type={event.type}, payload={event.payload}")
         current_time = event.trigger_time
         history_log.append((current_time, event.type, event.payload))
+        
+        if event.type == "arrival":
+            _handle_arrival(event, current_time)
+            
+        elif event.type == "edge_block":
+            _handle_disaster(event, current_time, queue)
     
     
     # Salva json do historico  
@@ -142,3 +148,11 @@ def run_simulation(initial_solution: Solution, failures: List[FailureEvent], ins
     
     return history_log
     
+    
+def _handle_arrival(event: SimulationEvent, current_time: float):
+    # Lógica de chegada (descarregar vítimas, etc.)
+    pass
+
+def _handle_disaster(event: SimulationEvent, current_time: float, queue: List[QueueItem]):
+    # Lógica de acionar o PSO e reescrever a fila (queue)
+    pass
