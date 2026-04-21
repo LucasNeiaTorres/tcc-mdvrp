@@ -10,6 +10,7 @@ from core.solution import Solution
 from utils.metrics import euclidean_distance
 from utils.results_io import save_history_log
 from .models import FailureEvent
+from .state import VehicleState
 
 SPEED_KMH = 50.0
 _EVENT_SEQ = count()
@@ -119,8 +120,26 @@ def pop_next_event(queue: List[QueueItem]) -> SimulationEvent | None:
     _, _, event = heapq.heappop(queue)
     return event
 
+def _build_vehicle_states(initial_solution: Solution) -> dict[int, VehicleState]:
+    """Create one mutable VehicleState per route in the initial solution."""
+    vehicle_states: dict[int, VehicleState] = {}
+
+    for route_id, route in enumerate(initial_solution.routes, start=1):
+        vehicle_states[route_id] = VehicleState(
+            route_id=route_id,
+            route=route,
+            current_node_index=route.depot.index,
+            next_stop_index=1,
+            last_event_time_min=0.0,
+            status="at_depot",
+        )
+
+    return vehicle_states
+
+
 def run_simulation(initial_solution: Solution, failures: List[FailureEvent], instance_name: str):
     queue = generate_event_queue(initial_solution, failures)
+    vehicle_states = _build_vehicle_states(initial_solution)
     
     history_log = []
     current_time = 0.0
@@ -135,10 +154,10 @@ def run_simulation(initial_solution: Solution, failures: List[FailureEvent], ins
         history_log.append((current_time, event.type, event.payload))
         
         if event.type == "arrival":
-            _handle_arrival(event, current_time)
+            _handle_arrival(event, current_time, vehicle_states)
             
         elif event.type == "edge_block":
-            _handle_disaster(event, current_time, queue)
+            _handle_disaster(event, current_time, queue, vehicle_states)
     
     
     # Salva json do historico  
@@ -149,10 +168,51 @@ def run_simulation(initial_solution: Solution, failures: List[FailureEvent], ins
     return history_log
     
     
-def _handle_arrival(event: SimulationEvent, current_time: float):
-    # Lógica de chegada (descarregar vítimas, etc.)
-    pass
+def _handle_arrival(
+    event: SimulationEvent,
+    current_time: float,
+    vehicle_states: dict[int, VehicleState],
+):
+    route_id = event.payload.get("route_id")
+    node_index = event.payload.get("node_index")
+    stop_index = event.payload.get("stop_index")
 
-def _handle_disaster(event: SimulationEvent, current_time: float, queue: List[QueueItem]):
+    if route_id is None or route_id not in vehicle_states:
+        return
+
+    state = vehicle_states[route_id]
+    state.current_node_index = int(node_index)
+    state.next_stop_index = int(stop_index) + 1
+    state.last_event_time_min = current_time
+    
+    # print(f"Vehicle {route_id} arrived at node {node_index} at time {current_time:.2f} min (stop {stop_index}), state updated: {state}")
+
+    if event.payload.get("is_return_to_depot"):
+        state.remove_load(state.load_current)
+        state.status = "at_depot"
+        return
+
+    customer = state.customers_by_index.get(int(node_index))
+    if customer is None:
+        return
+
+    if not state.can_add_load(customer.demand):
+        state.status = "blocked"
+        print(
+            f"Vehicle {route_id} cannot load demand {customer.demand} at node {node_index}; "
+            f"remaining capacity={state.capacity_remaining:.2f}"
+        )
+        return
+
+    state.add_load(customer.demand)
+    state.mark_visited(int(node_index))
+    state.status = "servicing"
+
+def _handle_disaster(
+    event: SimulationEvent,
+    current_time: float,
+    queue: List[QueueItem],
+    vehicle_states: dict[int, VehicleState],
+):
     # Lógica de acionar o PSO e reescrever a fila (queue)
-    pass
+    del current_time, queue, vehicle_states

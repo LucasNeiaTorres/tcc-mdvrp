@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Optional
 
-from core.entities import Route
+from core.entities import Customer, Route
 
 
 def _normalize_edge(node_a: int, node_b: int) -> tuple[int, int]:
@@ -53,12 +53,15 @@ class VehicleState:
     pending_customer_ids: set[int] = field(default_factory=set)
     capacity_total: float = 0.0
     load_current: float = 0.0
+    customers_by_index: dict[int, Customer] = field(default_factory=dict)
     status: str = "at_depot"
 
     def __post_init__(self) -> None:
         """Initialize pending customers and capacity defaults."""
         if not self.pending_customer_ids:
             self.pending_customer_ids = {c.index for c in self.route.customers}
+        if not self.customers_by_index:
+            self.customers_by_index = {c.index: c for c in self.route.customers}
         if self.capacity_total <= 0:
             self.capacity_total = self.route.depot.max_capacity
         if self.load_current < 0:
