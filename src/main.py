@@ -13,9 +13,9 @@ from scenario.simulator import run_simulation
 def main() -> None:
     """Load p01, run the greedy algorithm and visualize the result."""
     base_dir = Path(__file__).parent.parent
-    data_file = base_dir / "data" / "raw" / "cordeau" / "p01"
-    solution_file = base_dir / "data" / "raw" / "cordeau_sol" / "p01.res"
-    failures_file = base_dir / "data" / "processed" / "failures" / "p01_seed41.json"
+    data_file = base_dir / "data" / "raw" / "cordeau" / "pr01"
+    solution_file = base_dir / "data" / "raw" / "cordeau_sol" / "pr01.res"
+    failures_file = base_dir / "data" / "processed" / "failures" / "p02_seed42_events3.json"
 
     # Load raw instance and reference solution
     instance = read_cordeau_data_file(str(data_file))
@@ -41,7 +41,7 @@ def main() -> None:
     routing_file = results_dir / f"{data_file.name}_routes.json"
 
     save_clustering_result(
-        output_path=str(clustering_file),
+        output_path=str(clustering_file), 
         instance_name=data_file.name,
         algorithm_name=str(ga_pso),
         clusters=ga_pso.last_clusters,

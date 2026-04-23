@@ -12,7 +12,7 @@ from utils.results_io import save_history_log
 from .models import FailureEvent
 from .state import VehicleState
 
-SPEED_KMH = 50.0
+UNIT_SPEED = 1.0
 _EVENT_SEQ = count()
 
 
@@ -31,7 +31,7 @@ def _dist(a: Depot | Customer, b: Depot | Customer) -> float:
 
 
 def _travel_time(a: Depot | Customer, b: Depot | Customer) -> float:
-    return (_dist(a, b) / SPEED_KMH) * 60.0
+    return _dist(a, b) / UNIT_SPEED
 
 
 def _arrival_events_from_solution(solution: Solution) -> List[SimulationEvent]:
@@ -52,10 +52,23 @@ def _arrival_events_from_solution(solution: Solution) -> List[SimulationEvent]:
                         "depot_index": route.depot.index,
                         "node_index": customer.index,
                         "stop_index": stop_idx,
+                        "service_time": customer.service_time,
                     },
                 )
             )
             t += customer.service_time
+            events.append(
+                SimulationEvent(
+                    trigger_time=t,
+                    type="service_end",
+                    payload={
+                        "route_id": route_id,
+                        "depot_index": route.depot.index,
+                        "node_index": customer.index,
+                        "stop_index": stop_idx,
+                    },
+                )
+            )
             prev = customer
 
         if route.customers:
@@ -155,6 +168,9 @@ def run_simulation(initial_solution: Solution, failures: List[FailureEvent], ins
         
         if event.type == "arrival":
             _handle_arrival(event, current_time, vehicle_states)
+
+        elif event.type == "service_end":
+            _handle_service_end(event, current_time, vehicle_states)
             
         elif event.type == "edge_block":
             _handle_disaster(event, current_time, queue, vehicle_states)
@@ -207,6 +223,23 @@ def _handle_arrival(
     state.add_load(customer.demand)
     state.mark_visited(int(node_index))
     state.status = "servicing"
+
+
+def _handle_service_end(
+    event: SimulationEvent,
+    current_time: float,
+    vehicle_states: dict[int, VehicleState],
+):
+    route_id = event.payload.get("route_id")
+
+    if route_id is None or route_id not in vehicle_states:
+        return
+
+    state = vehicle_states[route_id]
+    state.last_event_time_min = current_time
+
+    if state.status == "servicing":
+        state.status = "en_route"
 
 def _handle_disaster(
     event: SimulationEvent,
