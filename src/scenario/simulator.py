@@ -10,7 +10,7 @@ from core.solution import Solution
 from utils.metrics import euclidean_distance
 from utils.results_io import save_history_log
 from .models import FailureEvent
-from .state import VehicleState
+from .state import VehicleState, _normalize_edge
 
 UNIT_SPEED = 1.0
 _EVENT_SEQ = count()
@@ -157,7 +157,6 @@ def run_simulation(initial_solution: Solution, failures: List[FailureEvent], ins
     history_log = []
     current_time = 0.0
     
-    # Itera sobre os eventos na fila e guarda no historico
     while queue:
         event = pop_next_event(queue)
         if event is None:
@@ -245,7 +244,35 @@ def _handle_disaster(
     event: SimulationEvent,
     current_time: float,
     queue: List[QueueItem],
-    vehicle_states: dict[int, VehicleState],
+    vehicle_states: dict[int, VehicleState]
 ):
-    # Lógica de acionar o PSO e reescrever a fila (queue)
+    node_a = event.payload["node_a"]
+    node_b = event.payload["node_b"]
+    
+    _find_affected_routes_by_broken_edge(node_a, node_b, vehicle_states)
+    # bloquear rota = nodo infinito e atualizar matriz de distancia? 
+    # calcular posição dos veiculos? criar nodos temporarios? 
+    # Achar veículos afetados pelo bloqueio do caminho (edge_block)
+    # Para cada veículo afetado, gerar novos eventos de chegada e serviço com base na nova rota sugerida pelo PSO
+    # Verificar se nova solução é muito pior que a original (ex: aumento de custo > 20%), se sim, rotear tudo novamente do zero e talvez reclusterizar os clientes  
+    # Reescrever a fila de eventos (queue) com os novos eventos gerados, mantendo a ordem correta de execução
+    
     del current_time, queue, vehicle_states
+
+def _find_affected_routes_by_broken_edge(
+    node_a: int, 
+    node_b: int, 
+    vehicle_states: dict[int, VehicleState]
+) -> List[int]:
+    routes: List[int] = []
+    broken_edge = _normalize_edge(node_a, node_b)
+    
+    for state in vehicle_states.values():
+        if state.has_future_broken_edge({broken_edge}):
+            routes.append(state.route_id)
+            
+    if len(routes) == 0:
+        print("Rota não encontrada, verificar se o bloqueio é entre um cliente e o deposito ou se os indices estão corretos")
+    else:
+        print(f"Rota(s) afetada(s) pelo bloqueio do caminho entre {node_a} e {node_b}: {routes}")
+    return routes
