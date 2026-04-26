@@ -81,15 +81,23 @@ class DepotAssignmentProblem(ElementwiseProblem):
 
         # Capacity penalty: accumulate load per depot slot
         loads: Dict[int, float] = {i: 0.0 for i in range(len(self.depots))}
+        service_times: Dict[int, float] = {i: 0.0 for i in range(len(self.depots))}
         for i, slot in enumerate(x):
             loads[slot] += self.customers[i].demand
+            service_times[slot] += self.customers[i].service_time
 
-        penalty = self.capacity_penalty * sum(
+        capacity_penalty = self.capacity_penalty * sum(
             max(0.0, loads[i] - (self.depots[i].max_capacity * self.depots[i].max_vehicles))
             for i in range(len(self.depots))
         )
 
-        out["F"] = travel + penalty
+        duration_penalty = self.capacity_penalty * sum(
+            max(0.0, service_times[i] - (self.depots[i].max_duration * self.depots[i].max_vehicles))
+            for i in range(len(self.depots))
+            if self.depots[i].max_duration > 0
+        )
+
+        out["F"] = travel + capacity_penalty + duration_penalty
 
 
 def run_ga_clustering(

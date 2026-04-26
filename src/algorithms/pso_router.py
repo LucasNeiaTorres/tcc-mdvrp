@@ -46,16 +46,18 @@ def bellman_split(
     dist_fn: Callable[[int, int], float],
 ) -> List[List[Customer]]:
     """
-    Optimally partition an ordered customer sequence into capacity-feasible
-    vehicle routes using the Bellman (DAG shortest-path) split algorithm.
+    Optimally partition an ordered customer sequence into capacity- and
+    duration-feasible vehicle routes using the Bellman (DAG shortest-path)
+    split algorithm.
 
     Each contiguous segment becomes one vehicle route
     ``depot → seg[0] → ... → seg[-1] → depot``.  The DP finds the cut points
     that minimise total travel distance subject to each segment's total demand
-    not exceeding ``depot.max_capacity``.
+    not exceeding ``depot.max_capacity`` and total duration (travel + service
+    times) not exceeding ``depot.max_duration`` (when non-zero).
 
-    Customers whose individual demand exceeds capacity are placed in their own
-    route so that all customers are always routed.
+    Customers whose individual demand or duration exceeds the limits are placed
+    in their own route so that all customers are always routed.
     """
     n = len(ordered)
     INF = float("inf")
@@ -67,16 +69,21 @@ def bellman_split(
         if dp[i] == INF:
             continue
         load = 0.0
+        service = 0.0
         prev_idx = depot.index
         travel = 0.0
         for j in range(i, n):
             load += ordered[j].demand
-            # Allow singleton segments even when demand exceeds capacity.
+            service += ordered[j].service_time
+            # Allow singleton segments even when constraints are exceeded.
             if load > depot.max_capacity and j > i:
                 break
             travel += dist_fn(prev_idx, ordered[j].index)
             prev_idx = ordered[j].index
-            total = dp[i] + travel + dist_fn(ordered[j].index, depot.index)
+            route_dist = travel + dist_fn(ordered[j].index, depot.index)
+            if depot.max_duration > 0 and route_dist + service > depot.max_duration and j > i:
+                break
+            total = dp[i] + route_dist
             if total < dp[j + 1]:
                 dp[j + 1] = total
                 pred[j + 1] = i
@@ -138,6 +145,33 @@ class RoutingProblem(ElementwiseProblem):
         out["F"] = total
 
 
+def two_opt(route: List[Customer], depot: Depot, dist_fn: Callable[[int, int], float]) -> List[Customer]:
+    """
+    Improve a single-vehicle route with 2-opt local search.
+
+    Repeatedly reverses sub-sequences between indices i and k whenever doing
+    so reduces the total round-trip distance.  Runs until no improving swap
+    remains (first-improvement strategy, O(n²) per pass).
+    """
+    best = list(route)
+    n = len(best)
+    improved = True
+    while improved:
+        improved = False
+        for i in range(n - 1):
+            for k in range(i + 2, n):
+                # Edges being removed: (i-1 → i) and (k → k+1)
+                a = depot.index if i == 0 else best[i - 1].index
+                b = best[i].index
+                c = best[k].index
+                d = depot.index if k == n - 1 else best[k + 1].index
+
+                if dist_fn(a, c) + dist_fn(b, d) < dist_fn(a, b) + dist_fn(c, d):
+                    best[i : k + 1] = best[i : k + 1][::-1]
+                    improved = True
+    return best
+
+
 def run_pso_routing(
     depot: Depot,
     customers: List[Customer],
@@ -190,4 +224,5 @@ def run_pso_routing(
     perm = np.argsort(result.X)
     ordered_customers = [customers[i] for i in perm]
     segments = bellman_split(ordered_customers, depot, dist_fn)
-    return [Route(depot=depot, customers=seg) for seg in segments]
+    # return [Route(depot=depot, customers=seg) for seg in segments]
+    return [Route(depot=depot, customers=two_opt(seg, depot, dist_fn)) for seg in segments]
