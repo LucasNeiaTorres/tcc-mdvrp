@@ -249,7 +249,9 @@ def _handle_disaster(
     node_a = event.payload["node_a"]
     node_b = event.payload["node_b"]
     
-    _find_affected_routes_by_broken_edge(node_a, node_b, vehicle_states)
+    affected_route = _find_affected_route_by_broken_edge(node_a, node_b, vehicle_states)
+    if affected_route is None:
+        return
     # bloquear rota = nodo infinito e atualizar matriz de distancia? 
     # calcular posição dos veiculos? criar nodos temporarios? 
     # Achar veículos afetados pelo bloqueio do caminho (edge_block)
@@ -259,20 +261,17 @@ def _handle_disaster(
     
     del current_time, queue, vehicle_states
 
-def _find_affected_routes_by_broken_edge(
+def _find_affected_route_by_broken_edge(
     node_a: int, 
     node_b: int, 
     vehicle_states: dict[int, VehicleState]
-) -> List[int]:
-    routes: List[int] = []
+) -> int | None:
     broken_edge = _normalize_edge(node_a, node_b)
     
     for state in vehicle_states.values():
         if state.has_future_broken_edge({broken_edge}):
-            routes.append(state.route_id)
-            
-    if len(routes) == 0:
-        print("Rota não encontrada, verificar se o bloqueio é entre um cliente e o deposito ou se os indices estão corretos")
-    else:
-        print(f"Rota(s) afetada(s) pelo bloqueio do caminho entre {node_a} e {node_b}: {routes}")
-    return routes
+            print(f"Rota afetada pelo bloqueio do caminho entre {node_a} e {node_b}: {state.route_id}")
+            return state.route_id
+
+    print("Rota não encontrada, verificar se o bloqueio é entre um cliente e o deposito ou se os indices estão corretos")
+    return None
