@@ -5,7 +5,7 @@ import heapq
 from itertools import count
 from typing import Any, List, Tuple
 
-from core.entities import Customer, Depot
+from core.entities import Customer, Depot, Route
 from core.solution import Solution
 from algorithms.base import MDVRPAlgorithm
 from utils.metrics import euclidean_distance
@@ -33,6 +33,21 @@ def _dist(a: Depot | Customer, b: Depot | Customer) -> float:
 
 def _travel_time(a: Depot | Customer, b: Depot | Customer) -> float:
     return _dist(a, b) / UNIT_SPEED
+
+
+def _interpolate_position(
+    node_a: Depot | Customer,
+    node_b: Depot | Customer,
+    elapsed_time: float,
+) -> tuple[float, float]:
+    total_time = _travel_time(node_a, node_b)
+    if total_time <= 0:
+        return (node_a.x, node_a.y)
+
+    ratio = max(0.0, min(1.0, elapsed_time / total_time))
+    x = node_a.x + (node_b.x - node_a.x) * ratio
+    y = node_a.y + (node_b.y - node_a.y) * ratio
+    return (x, y)
 
 
 def _arrival_events_from_solution(solution: Solution) -> List[SimulationEvent]:
@@ -149,7 +164,7 @@ def _remove_future_events_for_route(queue, route_id, current_time):
 
 def _build_future_events_for_route(
     route_id: int,
-    route: Solution | Depot | Customer | Any,
+    route: Route,
     start_node: Depot | Customer,
     start_time: float,
 ) -> List[SimulationEvent]:
@@ -232,9 +247,7 @@ def run_simulation(
     initial_solution: Solution,
     failures: List[FailureEvent],
     instance_name: str,
-    algorithm: MDVRPAlgorithm,
-    customers: List[Customer],
-    depots: List[Depot],
+    algorithm: MDVRPAlgorithm
 ):
     current_solution = initial_solution
     queue = generate_event_queue(current_solution, failures)
@@ -362,17 +375,42 @@ def _handle_disaster(
     # Verificar se nova solução é muito pior que a original (ex: aumento de custo > 20%), se sim, rotear tudo novamente do zero e talvez reclusterizar os clientes  
     # Reescrever a fila de eventos (queue) com os novos eventos gerados, mantendo a ordem correta de execução
 
+    fixed_next_customer: Customer | None = None
+    remaining_travel = 0.0
+    if affected_vehicle_state.is_travelling_edge(node_a, node_b):
+        leg = affected_vehicle_state.current_leg()
+        if leg is not None:
+            from_idx, to_idx = leg
+            from_node = (
+                original_route.depot
+                if from_idx == original_route.depot.index
+                else affected_vehicle_state.customers_by_index.get(from_idx, original_route.depot)
+            )
+            to_node = (
+                original_route.depot
+                if to_idx == original_route.depot.index
+                else affected_vehicle_state.customers_by_index.get(to_idx, original_route.depot)
+            )
+            elapsed = current_time - affected_vehicle_state.last_event_time_min
+            remaining_travel = max(0.0, _travel_time(from_node, to_node) - elapsed)
+            if isinstance(to_node, Customer):
+                fixed_next_customer = to_node
+
     # Build pending customers list from cached ids (deterministic order)
     pending_customers = [
         affected_vehicle_state.customers_by_index[cid]
         for cid in sorted(affected_vehicle_state.pending_customer_ids)
+        if fixed_next_customer is None or cid != fixed_next_customer.index
     ]
 
     # Ask the algorithm to reroute locally for the depot
     broken_edge = _normalize_edge(node_a, node_b)
     algorithm._build_matrix([affected_vehicle_state.route.depot], pending_customers)
     algorithm._set_edge_inf(*broken_edge)
-    reroute_solution = algorithm.reroute_local(affected_vehicle_state.route.depot, pending_customers)
+    if pending_customers:
+        reroute_solution = algorithm.reroute_local(affected_vehicle_state.route.depot, pending_customers)
+    else:
+        reroute_solution = Solution(routes=[Route(depot=affected_vehicle_state.route.depot, customers=[])])
     print(
         f"Reroute local returned {len(reroute_solution.routes)} route(s) for depot {affected_vehicle_state.route.depot.index}"
     )
@@ -384,6 +422,11 @@ def _handle_disaster(
         print("Reroute local returned multiple routes; using the first one for now.")
 
     new_route = reroute_solution.routes[0]
+    if fixed_next_customer is not None:
+        new_route = Route(
+            depot=new_route.depot,
+            customers=[fixed_next_customer, *new_route.customers],
+        )
 
     reroute_vehicle_payload = _build_reroute_vehicle_payload(
         vehicle_state=affected_vehicle_state,
@@ -421,20 +464,78 @@ def _handle_disaster(
     
     _remove_future_events_for_route(queue, affected_route, current_time)
 
-    start_node = (
-        new_route.depot
-        if affected_vehicle_state.current_node_index == new_route.depot.index
-        else affected_vehicle_state.customers_by_index.get(
-            affected_vehicle_state.current_node_index, new_route.depot
+    if fixed_next_customer is not None:
+        arrival_time = current_time + remaining_travel
+        arrival_event = SimulationEvent(
+            trigger_time=arrival_time,
+            type="arrival",
+            payload={
+                "route_id": affected_route,
+                "depot_index": new_route.depot.index,
+                "node_index": fixed_next_customer.index,
+                "stop_index": 1,
+                "service_time": fixed_next_customer.service_time,
+            },
         )
-    )
-    future_events = _build_future_events_for_route(
-        route_id=affected_route,
-        route=new_route,
-        start_node=start_node,
-        start_time=current_time,
-    )
-    _insert_events(queue, future_events)
+        service_end_time = arrival_time + fixed_next_customer.service_time
+        service_end_event = SimulationEvent(
+            trigger_time=service_end_time,
+            type="service_end",
+            payload={
+                "route_id": affected_route,
+                "depot_index": new_route.depot.index,
+                "node_index": fixed_next_customer.index,
+                "stop_index": 1,
+            },
+        )
+        remaining_route = Route(
+            depot=new_route.depot,
+            customers=new_route.customers[1:],
+        )
+        future_events = _build_future_events_for_route(
+            route_id=affected_route,
+            route=remaining_route,
+            start_node=fixed_next_customer,
+            start_time=service_end_time,
+        )
+        _insert_events(queue, [arrival_event, service_end_event] + future_events)
+    else:
+        start_node = (
+            new_route.depot
+            if affected_vehicle_state.current_node_index == new_route.depot.index
+            else affected_vehicle_state.customers_by_index.get(
+                affected_vehicle_state.current_node_index, new_route.depot
+            )
+        )
+
+        service_end_event: SimulationEvent | None = None
+        start_time = current_time
+        if affected_vehicle_state.status == "servicing" and isinstance(start_node, Customer):
+            elapsed = current_time - affected_vehicle_state.last_event_time_min
+            remaining_service = max(0.0, start_node.service_time - elapsed)
+            service_end_time = current_time + remaining_service
+            service_end_event = SimulationEvent(
+                trigger_time=service_end_time,
+                type="service_end",
+                payload={
+                    "route_id": affected_route,
+                    "depot_index": new_route.depot.index,
+                    "node_index": start_node.index,
+                    "stop_index": 0,
+                },
+            )
+            start_time = service_end_time
+
+        future_events = _build_future_events_for_route(
+            route_id=affected_route,
+            route=new_route,
+            start_node=start_node,
+            start_time=start_time,
+        )
+        if service_end_event is None:
+            _insert_events(queue, future_events)
+        else:
+            _insert_events(queue, [service_end_event] + future_events)
     
 
     return 1
@@ -442,8 +543,8 @@ def _handle_disaster(
 
 def _build_reroute_vehicle_payload(
     vehicle_state: VehicleState,
-    original_route: Solution | Depot | Customer | Any,
-    rerouted_route,
+    original_route: Route,
+    rerouted_route: Route,
 ) -> dict[str, Any]:
     def _path_payload(entities: List[Depot | Customer], include_first_customer: bool) -> dict[str, Any]:
         travel_distance = 0.0
