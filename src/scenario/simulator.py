@@ -134,6 +134,82 @@ def pop_next_event(queue: List[QueueItem]) -> SimulationEvent | None:
     _, _, event = heapq.heappop(queue)
     return event
 
+def _remove_future_events_for_route(queue, route_id, current_time):
+    queue[:] = [
+        (t, seq, event)
+        for t, seq, event in queue
+        if not (
+            t >= current_time
+            and event.payload.get("route_id") == route_id
+            and event.type in {"arrival", "service_end"}
+        )
+    ]
+    heapq.heapify(queue)
+
+
+def _build_future_events_for_route(
+    route_id: int,
+    route: Solution | Depot | Customer | Any,
+    start_node: Depot | Customer,
+    start_time: float,
+) -> List[SimulationEvent]:
+    events: List[SimulationEvent] = []
+    t = start_time
+    prev: Depot | Customer = start_node
+
+    for stop_idx, customer in enumerate(route.customers, start=1):
+        t += _travel_time(prev, customer)
+        events.append(
+            SimulationEvent(
+                trigger_time=t,
+                type="arrival",
+                payload={
+                    "route_id": route_id,
+                    "depot_index": route.depot.index,
+                    "node_index": customer.index,
+                    "stop_index": stop_idx,
+                    "service_time": customer.service_time,
+                },
+            )
+        )
+        t += customer.service_time
+        events.append(
+            SimulationEvent(
+                trigger_time=t,
+                type="service_end",
+                payload={
+                    "route_id": route_id,
+                    "depot_index": route.depot.index,
+                    "node_index": customer.index,
+                    "stop_index": stop_idx,
+                },
+            )
+        )
+        prev = customer
+
+    if route.customers:
+        t += _travel_time(prev, route.depot)
+        events.append(
+            SimulationEvent(
+                trigger_time=t,
+                type="arrival",
+                payload={
+                    "route_id": route_id,
+                    "depot_index": route.depot.index,
+                    "node_index": route.depot.index,
+                    "stop_index": len(route.customers) + 1,
+                    "is_return_to_depot": True,
+                },
+            )
+        )
+
+    return events
+
+
+def _insert_events(queue: List[QueueItem], events: List[SimulationEvent]) -> None:
+    for event in events:
+        push_event(queue, event)
+        
 
 
 def _build_vehicle_states(initial_solution: Solution) -> dict[int, VehicleState]:
@@ -298,8 +374,7 @@ def _handle_disaster(
     algorithm._set_edge_inf(*broken_edge)
     reroute_solution = algorithm.reroute_local(affected_vehicle_state.route.depot, pending_customers)
     print(
-        f"Reroute local returned {len(reroute_solution.routes)} route(s) for depot "
-        f"{affected_vehicle_state.route.depot.index}: {reroute_solution.routes}"
+        f"Reroute local returned {len(reroute_solution.routes)} route(s) for depot {affected_vehicle_state.route.depot.index}"
     )
     if not reroute_solution.routes:
         print("Reroute local returned no routes; keeping original route.")
@@ -343,8 +418,24 @@ def _handle_disaster(
         reroute_index=reroute_index,
     )
     print(f"Saved reroute result to {output_path}")
+    
+    _remove_future_events_for_route(queue, affected_route, current_time)
 
-    del current_time, queue, vehicle_states
+    start_node = (
+        new_route.depot
+        if affected_vehicle_state.current_node_index == new_route.depot.index
+        else affected_vehicle_state.customers_by_index.get(
+            affected_vehicle_state.current_node_index, new_route.depot
+        )
+    )
+    future_events = _build_future_events_for_route(
+        route_id=affected_route,
+        route=new_route,
+        start_node=start_node,
+        start_time=current_time,
+    )
+    _insert_events(queue, future_events)
+    
 
     return 1
 
