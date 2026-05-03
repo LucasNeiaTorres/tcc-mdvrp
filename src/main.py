@@ -13,9 +13,9 @@ from scenario.simulator import run_simulation
 def main() -> None:
     """Load p01, run the greedy algorithm and visualize the result."""
     base_dir = Path(__file__).parent.parent
-    data_file = base_dir / "data" / "raw" / "cordeau" / "pr01"
-    solution_file = base_dir / "data" / "raw" / "cordeau_sol" / "pr01.res"
-    failures_file = base_dir / "data" / "processed" / "failures" / "p02_seed42_events3.json"
+    data_file = base_dir / "data" / "raw" / "cordeau" / "p02"
+    solution_file = base_dir / "data" / "raw" / "cordeau_sol" / "p02.res"
+    failures_file = base_dir / "data" / "processed" / "failures" / "p02_seed43_events20.json"
 
     # Load raw instance and reference solution
     instance = read_cordeau_data_file(str(data_file))
@@ -52,14 +52,6 @@ def main() -> None:
         algorithm_name=str(ga_pso),
         solution=ga_pso_solution,
     )
-    
-    run_simulation(
-        # instance=instance,
-        initial_solution=ga_pso_solution,
-        failures=failures,
-        instance_name=data_file.name,
-        # output_dir=base_dir / "data" / "processed" / "simulations" / data_file.name,
-    )
 
     print(f"Reference   : {reference_solution.objective:.2f}")
     # print(f"{greedy}  cost: {greedy_solution.total_cost():.2f}  feasible: {greedy_solution.is_feasible()}")
@@ -70,6 +62,28 @@ def main() -> None:
 
     # Visualize
     visualize_instance(instance)
+    visualize_comparison(
+        instance,
+        # [reference_solution, greedy_solution, ga_pso_solution],
+        [reference_solution, ga_pso_solution],
+        titles=[
+            f"Reference (obj: {reference_solution.objective:.2f})",
+            # f"Greedy (cost: {greedy_solution.total_cost():.2f})",
+            f"GA+PSO (cost: {ga_pso_solution.total_cost():.2f})",
+        ],
+    )
+    
+    run_simulation(
+        # instance=instance,
+        initial_solution=ga_pso_solution,
+        failures=failures,
+        instance_name=data_file.name,
+        algorithm=ga_pso,
+        customers=customers,
+        depots=depots,
+        # output_dir=base_dir / "data" / "processed" / "simulations" / data_file.name,
+    )
+    
     visualize_comparison(
         instance,
         # [reference_solution, greedy_solution, ga_pso_solution],

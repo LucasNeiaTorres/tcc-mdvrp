@@ -85,3 +85,20 @@ class GAPSOAlgorithm(ClusterFirstAlgorithm):
             f"ga_pop={self.cfg.ga.pop_size}, ga_gen={self.cfg.ga.n_gen}, "
             f"pso_pop={self.cfg.pso.pop_size}, pso_gen={self.cfg.pso.n_gen})"
         )
+
+    def reroute_local(
+        self,
+        depot: Depot,
+        customers: List[Customer],
+    ) -> Solution:
+        """Reroute only the customers for a single depot using the PSO router.
+
+        Builds a local distance matrix for the depot+customers and runs the
+        PSO-based routing on that subset. Returns a Solution.
+        """
+        return Solution(routes=run_pso_routing(
+            depot=depot,
+            customers=customers,
+            dist_fn=self._dist,
+            cfg=self.cfg.pso,
+        ))

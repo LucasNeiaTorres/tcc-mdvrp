@@ -7,6 +7,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Tuple
 
+from core.entities import Route
 from core.solution import Solution
 
 
@@ -15,6 +16,18 @@ def _build_metadata(instance_name: str, algorithm_name: str) -> dict:
         "instance": instance_name,
         "algorithm": algorithm_name,
         "generated_at": datetime.now().isoformat(timespec="seconds"),
+    }
+
+
+def _serialize_route(route: Route, route_id: int) -> dict:
+    return {
+        "route_id": route_id,
+        "depot_index": route.depot.index,
+        "customer_indices": [c.index for c in route.customers],
+        "total_demand": route.total_demand(),
+        "total_distance": route.total_distance(),
+        "total_duration": route.total_duration(),
+        "feasible": route.is_feasible(),
     }
 
 
@@ -61,19 +74,10 @@ def save_routing_result(
     out = Path(output_path)
     out.parent.mkdir(parents=True, exist_ok=True)
 
-    routes_payload = []
-    for route_idx, route in enumerate(solution.routes, start=1):
-        routes_payload.append(
-            {
-                "route_id": route_idx,
-                "depot_index": route.depot.index,
-                "customer_indices": [c.index for c in route.customers],
-                "total_demand": route.total_demand(),
-                "total_distance": route.total_distance(),
-                "total_duration": route.total_duration(),
-                "feasible": route.is_feasible(),
-            }
-        )
+    routes_payload = [
+        _serialize_route(route, route_idx)
+        for route_idx, route in enumerate(solution.routes, start=1)
+    ]
 
     payload = {
         "metadata": _build_metadata(instance_name, algorithm_name),
@@ -83,6 +87,53 @@ def save_routing_result(
             "feasible": solution.is_feasible(),
         },
         "routes": routes_payload,
+    }
+
+    with out.open("w", encoding="utf-8") as f:
+        json.dump(payload, f, indent=2, ensure_ascii=True)
+        f.write("\n")
+
+    return out
+
+
+def save_reroute_result(
+    output_path: str,
+    instance_name: str,
+    algorithm_name: str,
+    solution: Solution,
+    vehicles: List[dict[str, Any]],
+    current_time_minutes: float,
+    broken_edge: tuple[int, int],
+    reroute_index: int,
+) -> Path:
+    """Save a reroute snapshot with executed/future/combined per-vehicle paths."""
+    out = Path(output_path)
+    out.parent.mkdir(parents=True, exist_ok=True)
+
+    realized_total_cost = sum(
+        float(vehicle.get("full_route", {}).get("travel_distance", 0.0))
+        for vehicle in vehicles
+    )
+
+    payload = {
+        "metadata": {
+            **_build_metadata(instance_name, algorithm_name),
+            "reroute_index": reroute_index,
+            "current_time_minutes": current_time_minutes,
+            "broken_edge": list(broken_edge),
+        },
+        "summary": {
+            "route_count": len(solution.routes),
+            "planned_total_cost": solution.total_cost(),
+            "realized_total_cost": realized_total_cost,
+            "feasible": solution.is_feasible(),
+            "affected_vehicle_count": len(vehicles),
+        },
+        "routes": [
+            _serialize_route(route, route_idx)
+            for route_idx, route in enumerate(solution.routes, start=1)
+        ],
+        "vehicles": vehicles,
     }
 
     with out.open("w", encoding="utf-8") as f:
@@ -120,15 +171,7 @@ def save_clustering_and_routing(
             for depot_idx, customer_indices in sorted(clusters.items())
         ],
         "routes": [
-            {
-                "route_id": route_idx,
-                "depot_index": route.depot.index,
-                "customer_indices": [c.index for c in route.customers],
-                "total_demand": route.total_demand(),
-                "total_distance": route.total_distance(),
-                "total_duration": route.total_duration(),
-                "feasible": route.is_feasible(),
-            }
+            _serialize_route(route, route_idx)
             for route_idx, route in enumerate(solution.routes, start=1)
         ],
     }

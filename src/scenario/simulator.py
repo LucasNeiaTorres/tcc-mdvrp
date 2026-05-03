@@ -7,8 +7,9 @@ from typing import Any, List, Tuple
 
 from core.entities import Customer, Depot
 from core.solution import Solution
+from algorithms.base import MDVRPAlgorithm
 from utils.metrics import euclidean_distance
-from utils.results_io import save_history_log
+from utils.results_io import save_history_log, save_reroute_result
 from .models import FailureEvent
 from .state import VehicleState, _normalize_edge
 
@@ -133,6 +134,8 @@ def pop_next_event(queue: List[QueueItem]) -> SimulationEvent | None:
     _, _, event = heapq.heappop(queue)
     return event
 
+
+
 def _build_vehicle_states(initial_solution: Solution) -> dict[int, VehicleState]:
     """Create one mutable VehicleState per route in the initial solution."""
     vehicle_states: dict[int, VehicleState] = {}
@@ -149,10 +152,18 @@ def _build_vehicle_states(initial_solution: Solution) -> dict[int, VehicleState]
 
     return vehicle_states
 
-
-def run_simulation(initial_solution: Solution, failures: List[FailureEvent], instance_name: str):
-    queue = generate_event_queue(initial_solution, failures)
-    vehicle_states = _build_vehicle_states(initial_solution)
+def run_simulation(
+    initial_solution: Solution,
+    failures: List[FailureEvent],
+    instance_name: str,
+    algorithm: MDVRPAlgorithm,
+    customers: List[Customer],
+    depots: List[Depot],
+):
+    current_solution = initial_solution
+    queue = generate_event_queue(current_solution, failures)
+    vehicle_states = _build_vehicle_states(current_solution)
+    reroute_count = 0
     
     history_log = []
     current_time = 0.0
@@ -172,7 +183,16 @@ def run_simulation(initial_solution: Solution, failures: List[FailureEvent], ins
             _handle_service_end(event, current_time, vehicle_states)
             
         elif event.type == "edge_block":
-            _handle_disaster(event, current_time, queue, vehicle_states)
+            reroute_count += _handle_disaster(
+                event,
+                current_time,
+                queue,
+                vehicle_states,
+                current_solution,
+                algorithm,
+                instance_name,
+                reroute_count,
+            )
     
     
     # Salva json do historico  
@@ -244,22 +264,149 @@ def _handle_disaster(
     event: SimulationEvent,
     current_time: float,
     queue: List[QueueItem],
-    vehicle_states: dict[int, VehicleState]
-):
+    vehicle_states: dict[int, VehicleState],
+    current_solution: Solution,
+    algorithm: MDVRPAlgorithm,
+    instance_name: str,
+    reroute_count: int,
+) -> int:
     node_a = event.payload["node_a"]
     node_b = event.payload["node_b"]
     
     affected_route = _find_affected_route_by_broken_edge(node_a, node_b, vehicle_states)
     if affected_route is None:
-        return
+        return 0
+    
+    affected_vehicle_state = vehicle_states[affected_route]
+    original_route = affected_vehicle_state.route
     # bloquear rota = nodo infinito e atualizar matriz de distancia? 
     # calcular posição dos veiculos? criar nodos temporarios? 
     # Achar veículos afetados pelo bloqueio do caminho (edge_block)
-    # Para cada veículo afetado, gerar novos eventos de chegada e serviço com base na nova rota sugerida pelo PSO
+    # Para cada veículo afetado, gerar novos eventos de chegada e serviço com base na nova rota sugerida pelo algoritmo
     # Verificar se nova solução é muito pior que a original (ex: aumento de custo > 20%), se sim, rotear tudo novamente do zero e talvez reclusterizar os clientes  
     # Reescrever a fila de eventos (queue) com os novos eventos gerados, mantendo a ordem correta de execução
-    
+
+    # Build pending customers list from cached ids (deterministic order)
+    pending_customers = [
+        affected_vehicle_state.customers_by_index[cid]
+        for cid in sorted(affected_vehicle_state.pending_customer_ids)
+    ]
+
+    # Ask the algorithm to reroute locally for the depot
+    broken_edge = _normalize_edge(node_a, node_b)
+    algorithm._build_matrix([affected_vehicle_state.route.depot], pending_customers)
+    algorithm._set_edge_inf(*broken_edge)
+    reroute_solution = algorithm.reroute_local(affected_vehicle_state.route.depot, pending_customers)
+    print(
+        f"Reroute local returned {len(reroute_solution.routes)} route(s) for depot "
+        f"{affected_vehicle_state.route.depot.index}: {reroute_solution.routes}"
+    )
+    if not reroute_solution.routes:
+        print("Reroute local returned no routes; keeping original route.")
+        return 0
+
+    if len(reroute_solution.routes) > 1:
+        print("Reroute local returned multiple routes; using the first one for now.")
+
+    new_route = reroute_solution.routes[0]
+
+    reroute_vehicle_payload = _build_reroute_vehicle_payload(
+        vehicle_state=affected_vehicle_state,
+        original_route=original_route,
+        rerouted_route=new_route,
+    )
+
+    current_solution.routes[affected_route - 1] = new_route
+
+    # Apply the new route to the affected vehicle state
+    affected_vehicle_state.route = new_route
+    affected_vehicle_state.customers_by_index = {c.index: c for c in new_route.customers}
+    affected_vehicle_state.pending_customer_ids = {
+        c.index for c in new_route.customers
+    } - affected_vehicle_state.visited_customer_ids
+    affected_vehicle_state.next_stop_index = 1
+
+    reroute_index = reroute_count + 1
+    time_tag = int(round(current_time * 100))
+    output_path = (
+        f"data/processed/results/{instance_name}_reroute_{reroute_index:03d}_"
+        f"t{time_tag:06d}.json"
+    )
+    save_reroute_result(
+        output_path=output_path,
+        instance_name=instance_name,
+        algorithm_name=f"{algorithm} (reroute {reroute_index})",
+        solution=current_solution,
+        vehicles=[reroute_vehicle_payload],
+        current_time_minutes=current_time,
+        broken_edge=broken_edge,
+        reroute_index=reroute_index,
+    )
+    print(f"Saved reroute result to {output_path}")
+
     del current_time, queue, vehicle_states
+
+    return 1
+
+
+def _build_reroute_vehicle_payload(
+    vehicle_state: VehicleState,
+    original_route: Solution | Depot | Customer | Any,
+    rerouted_route,
+) -> dict[str, Any]:
+    def _path_payload(entities: List[Depot | Customer], include_first_customer: bool) -> dict[str, Any]:
+        travel_distance = 0.0
+        for i in range(len(entities) - 1):
+            travel_distance += _dist(entities[i], entities[i + 1])
+
+        customer_entities = entities if include_first_customer else entities[1:]
+        customer_indices = [entity.index for entity in customer_entities if isinstance(entity, Customer)]
+        service_time = sum(
+            entity.service_time for entity in customer_entities if isinstance(entity, Customer)
+        )
+
+        return {
+            "path_nodes": [entity.index for entity in entities],
+            "customer_indices": customer_indices,
+            "travel_distance": travel_distance,
+            "service_time": service_time,
+            "total_duration": travel_distance + service_time,
+        }
+
+    original_nodes: List[Depot | Customer] = [
+        original_route.depot,
+        *original_route.customers,
+        original_route.depot,
+    ]
+    executed_nodes = original_nodes[: vehicle_state.next_stop_index]
+
+    current_node = (
+        original_route.depot
+        if vehicle_state.current_node_index == original_route.depot.index
+        else vehicle_state.customers_by_index[vehicle_state.current_node_index]
+    )
+    future_nodes: List[Depot | Customer] = [current_node, *rerouted_route.customers, rerouted_route.depot]
+    combined_nodes: List[Depot | Customer] = executed_nodes + future_nodes[1:]
+
+    executed_payload = _path_payload(executed_nodes, include_first_customer=True)
+    future_payload = _path_payload(future_nodes, include_first_customer=False)
+    full_payload = _path_payload(combined_nodes, include_first_customer=True)
+
+    return {
+        "route_id": vehicle_state.route_id,
+        "depot_index": original_route.depot.index,
+        "status": vehicle_state.status,
+        "current_node_index": vehicle_state.current_node_index,
+        "next_stop_index": vehicle_state.next_stop_index,
+        "visited_customer_indices": sorted(vehicle_state.visited_customer_ids),
+        "pending_customer_indices": sorted(vehicle_state.pending_customer_ids),
+        "executed_path": executed_payload,
+        "future_path": future_payload,
+        "full_route": {
+            **full_payload,
+            "feasible": rerouted_route.is_feasible(),
+        },
+    }
 
 def _find_affected_route_by_broken_edge(
     node_a: int, 
@@ -270,8 +417,8 @@ def _find_affected_route_by_broken_edge(
     
     for state in vehicle_states.values():
         if state.has_future_broken_edge({broken_edge}):
-            print(f"Rota afetada pelo bloqueio do caminho entre {node_a} e {node_b}: {state.route_id}")
+            print(f"Route {state.route_id} is affected by broken edge {broken_edge}.")  
             return state.route_id
 
-    print("Rota não encontrada, verificar se o bloqueio é entre um cliente e o deposito ou se os indices estão corretos")
+    print("Route affected by edge block not found among vehicle states.")
     return None
