@@ -114,6 +114,11 @@ def save_reroute_result(
         float(vehicle.get("full_route", {}).get("travel_distance", 0.0))
         for vehicle in vehicles
     )
+    wasted_total_distance = sum(
+        float(vehicle.get("wasted_travel_distance", 0.0))
+        for vehicle in vehicles
+    )
+    realized_total_cost += wasted_total_distance
 
     payload = {
         "metadata": {
@@ -126,6 +131,7 @@ def save_reroute_result(
             "route_count": len(solution.routes),
             "planned_total_cost": solution.total_cost(),
             "realized_total_cost": realized_total_cost,
+            "wasted_travel_distance": wasted_total_distance,
             "feasible": solution.is_feasible(),
             "affected_vehicle_count": len(vehicles),
         },

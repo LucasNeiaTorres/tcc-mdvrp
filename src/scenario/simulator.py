@@ -368,33 +368,67 @@ def _handle_disaster(
     
     affected_vehicle_state = vehicle_states[affected_route]
     original_route = affected_vehicle_state.route
-    # bloquear rota = nodo infinito e atualizar matriz de distancia? 
-    # calcular posição dos veiculos? criar nodos temporarios? 
-    # Achar veículos afetados pelo bloqueio do caminho (edge_block)
-    # Para cada veículo afetado, gerar novos eventos de chegada e serviço com base na nova rota sugerida pelo algoritmo
-    # Verificar se nova solução é muito pior que a original (ex: aumento de custo > 20%), se sim, rotear tudo novamente do zero e talvez reclusterizar os clientes  
-    # Reescrever a fila de eventos (queue) com os novos eventos gerados, mantendo a ordem correta de execução
 
+    # Resolve current node and determine whether we are on the broken edge.
+    current_node = (
+        original_route.depot
+        if affected_vehicle_state.current_node_index == original_route.depot.index
+        else affected_vehicle_state.customers_by_index.get(
+            affected_vehicle_state.current_node_index, original_route.depot
+        )
+    )
+    leg = affected_vehicle_state.current_leg()
+    on_broken_edge = affected_vehicle_state.is_travelling_edge(node_a, node_b)
+
+    # If the broken edge is in the future, keep the current next customer fixed.
     fixed_next_customer: Customer | None = None
-    remaining_travel = 0.0
-    if affected_vehicle_state.is_travelling_edge(node_a, node_b):
-        leg = affected_vehicle_state.current_leg()
-        if leg is not None:
-            from_idx, to_idx = leg
-            from_node = (
-                original_route.depot
-                if from_idx == original_route.depot.index
-                else affected_vehicle_state.customers_by_index.get(from_idx, original_route.depot)
-            )
-            to_node = (
-                original_route.depot
-                if to_idx == original_route.depot.index
-                else affected_vehicle_state.customers_by_index.get(to_idx, original_route.depot)
-            )
-            elapsed = current_time - affected_vehicle_state.last_event_time_min
-            remaining_travel = max(0.0, _travel_time(from_node, to_node) - elapsed)
-            if isinstance(to_node, Customer):
-                fixed_next_customer = to_node
+    travel_to_next = 0.0
+    if not on_broken_edge and leg is not None:
+        _, to_idx = leg
+        to_node = (
+            original_route.depot
+            if to_idx == original_route.depot.index
+            else affected_vehicle_state.customers_by_index.get(to_idx, original_route.depot)
+        )
+        if isinstance(to_node, Customer):
+            fixed_next_customer = to_node
+            if affected_vehicle_state.status == "en_route":
+                elapsed = max(0.0, current_time - affected_vehicle_state.last_event_time_min)
+                travel_to_next = max(0.0, _travel_time(current_node, to_node) - elapsed)
+            else:
+                travel_to_next = _travel_time(current_node, to_node)
+
+    # If the vehicle is on the broken edge, perform a U-turn and reroute from the leg origin.
+    wasted_travel_time = 0.0
+    wasted_travel_distance = 0.0
+    routing_depot = original_route.depot
+    event_start_node: Depot | Customer = current_node
+    start_time = current_time
+    if on_broken_edge and leg is not None:
+        from_idx, to_idx = leg
+        from_node = (
+            original_route.depot
+            if from_idx == original_route.depot.index
+            else affected_vehicle_state.customers_by_index.get(from_idx, original_route.depot)
+        )
+        to_node = (
+            original_route.depot
+            if to_idx == original_route.depot.index
+            else affected_vehicle_state.customers_by_index.get(to_idx, original_route.depot)
+        )
+        elapsed = max(0.0, current_time - affected_vehicle_state.last_event_time_min)
+        wasted_travel_time = elapsed * 2.0
+        wasted_travel_distance = wasted_travel_time * UNIT_SPEED
+        start_time = current_time + elapsed
+        event_start_node = from_node
+        routing_depot = Depot(
+            index=-(1000 + affected_route),
+            x=from_node.x,
+            y=from_node.y,
+            max_duration=original_route.depot.max_duration,
+            max_capacity=original_route.depot.max_capacity,
+            max_vehicles=1,
+        )
 
     # Build pending customers list from cached ids (deterministic order)
     pending_customers = [
@@ -405,12 +439,12 @@ def _handle_disaster(
 
     # Ask the algorithm to reroute locally for the depot
     broken_edge = _normalize_edge(node_a, node_b)
-    algorithm._build_matrix([affected_vehicle_state.route.depot], pending_customers)
+    algorithm._build_matrix([routing_depot], pending_customers)
     algorithm._set_edge_inf(*broken_edge)
     if pending_customers:
-        reroute_solution = algorithm.reroute_local(affected_vehicle_state.route.depot, pending_customers)
+        reroute_solution = algorithm.reroute_local(routing_depot, pending_customers)
     else:
-        reroute_solution = Solution(routes=[Route(depot=affected_vehicle_state.route.depot, customers=[])])
+        reroute_solution = Solution(routes=[Route(depot=routing_depot, customers=[])])
     print(
         f"Reroute local returned {len(reroute_solution.routes)} route(s) for depot {affected_vehicle_state.route.depot.index}"
     )
@@ -421,7 +455,10 @@ def _handle_disaster(
     if len(reroute_solution.routes) > 1:
         print("Reroute local returned multiple routes; using the first one for now.")
 
+    # Restore real depot if we used a virtual one, and prepend fixed next customer if needed.
     new_route = reroute_solution.routes[0]
+    if routing_depot.index < 0:
+        new_route = Route(depot=original_route.depot, customers=new_route.customers)
     if fixed_next_customer is not None:
         new_route = Route(
             depot=new_route.depot,
@@ -432,6 +469,8 @@ def _handle_disaster(
         vehicle_state=affected_vehicle_state,
         original_route=original_route,
         rerouted_route=new_route,
+        wasted_travel_time=wasted_travel_time,
+        wasted_travel_distance=wasted_travel_distance,
     )
 
     current_solution.routes[affected_route - 1] = new_route
@@ -462,10 +501,30 @@ def _handle_disaster(
     )
     print(f"Saved reroute result to {output_path}")
     
+    # Replace future events for the affected route with new ones.
     _remove_future_events_for_route(queue, affected_route, current_time)
 
+    service_end_event: SimulationEvent | None = None
+    # Schedule the fixed next customer first, then the rerouted remainder.
     if fixed_next_customer is not None:
-        arrival_time = current_time + remaining_travel
+        depart_time = current_time
+        if affected_vehicle_state.status == "servicing" and isinstance(current_node, Customer):
+            elapsed = current_time - affected_vehicle_state.last_event_time_min
+            remaining_service = max(0.0, current_node.service_time - elapsed)
+            service_end_time = current_time + remaining_service
+            service_end_event = SimulationEvent(
+                trigger_time=service_end_time,
+                type="service_end",
+                payload={
+                    "route_id": affected_route,
+                    "depot_index": new_route.depot.index,
+                    "node_index": current_node.index,
+                    "stop_index": 0,
+                },
+            )
+            depart_time = service_end_time
+
+        arrival_time = depart_time + travel_to_next
         arrival_event = SimulationEvent(
             trigger_time=arrival_time,
             type="arrival",
@@ -478,7 +537,7 @@ def _handle_disaster(
             },
         )
         service_end_time = arrival_time + fixed_next_customer.service_time
-        service_end_event = SimulationEvent(
+        fixed_service_end = SimulationEvent(
             trigger_time=service_end_time,
             type="service_end",
             payload={
@@ -498,21 +557,16 @@ def _handle_disaster(
             start_node=fixed_next_customer,
             start_time=service_end_time,
         )
-        _insert_events(queue, [arrival_event, service_end_event] + future_events)
+        events_to_insert = [arrival_event, fixed_service_end] + future_events
+        if service_end_event is None:
+            _insert_events(queue, events_to_insert)
+        else:
+            _insert_events(queue, [service_end_event] + events_to_insert)
     else:
-        start_node = (
-            new_route.depot
-            if affected_vehicle_state.current_node_index == new_route.depot.index
-            else affected_vehicle_state.customers_by_index.get(
-                affected_vehicle_state.current_node_index, new_route.depot
-            )
-        )
-
-        service_end_event: SimulationEvent | None = None
-        start_time = current_time
-        if affected_vehicle_state.status == "servicing" and isinstance(start_node, Customer):
+        # No fixed next customer; schedule from the current node or U-turn start.
+        if affected_vehicle_state.status == "servicing" and isinstance(event_start_node, Customer):
             elapsed = current_time - affected_vehicle_state.last_event_time_min
-            remaining_service = max(0.0, start_node.service_time - elapsed)
+            remaining_service = max(0.0, event_start_node.service_time - elapsed)
             service_end_time = current_time + remaining_service
             service_end_event = SimulationEvent(
                 trigger_time=service_end_time,
@@ -520,7 +574,7 @@ def _handle_disaster(
                 payload={
                     "route_id": affected_route,
                     "depot_index": new_route.depot.index,
-                    "node_index": start_node.index,
+                    "node_index": event_start_node.index,
                     "stop_index": 0,
                 },
             )
@@ -529,7 +583,7 @@ def _handle_disaster(
         future_events = _build_future_events_for_route(
             route_id=affected_route,
             route=new_route,
-            start_node=start_node,
+            start_node=event_start_node,
             start_time=start_time,
         )
         if service_end_event is None:
@@ -537,7 +591,13 @@ def _handle_disaster(
         else:
             _insert_events(queue, [service_end_event] + future_events)
     
-
+    # TODO: proximos passos:
+    # Fazer caso de rua cair enquanto veiculo esta nela (copilot agr)
+    # Testes com mais de um veiculo afetado (ex: bloqueio entre dois clientes que estão em rotas diferentes)
+    # Testar caso de bloqueio acontecer enquanto veiculo esta parado no cliente (ex: bloqueio entre cliente e depot)
+    # Testar caso de bloqueio acontecer enquanto veiculo esta durante viagem na rua quebrada e quando for futura tambem
+    # Implementar logica se reroute sugerido for muito pior que original (ex: aumento de custo > 20%), ai rotear tudo do zero e talvez reclusterizar os clientes
+    # Deixar codigo mais limpo e organizado, esse py esta ficando grande, talvez separar funcoes de events, handle disaster tambem esta grande
     return 1
 
 
@@ -545,6 +605,8 @@ def _build_reroute_vehicle_payload(
     vehicle_state: VehicleState,
     original_route: Route,
     rerouted_route: Route,
+    wasted_travel_time: float = 0.0,
+    wasted_travel_distance: float = 0.0,
 ) -> dict[str, Any]:
     def _path_payload(entities: List[Depot | Customer], include_first_customer: bool) -> dict[str, Any]:
         travel_distance = 0.0
@@ -592,6 +654,8 @@ def _build_reroute_vehicle_payload(
         "next_stop_index": vehicle_state.next_stop_index,
         "visited_customer_indices": sorted(vehicle_state.visited_customer_ids),
         "pending_customer_indices": sorted(vehicle_state.pending_customer_ids),
+        "wasted_travel_time": wasted_travel_time,
+        "wasted_travel_distance": wasted_travel_distance,
         "executed_path": executed_payload,
         "future_path": future_payload,
         "full_route": {
