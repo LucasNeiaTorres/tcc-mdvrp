@@ -3,7 +3,7 @@
 from abc import ABC, abstractmethod
 from typing import Dict, List
 
-from core.entities import Customer, Depot
+from core.entities import Customer, Depot, Route
 from core.solution import Solution
 from utils.metrics import build_distance_matrix
 
@@ -26,6 +26,29 @@ class MDVRPAlgorithm(ABC):
     def _dist(self, a_index: int, b_index: int) -> float:
         """O(1) distance lookup between any two node indices."""
         return self._dist_matrix[self._node_offset[a_index]][self._node_offset[b_index]]
+
+    def _set_edge_inf(self, node_a: int, node_b: int) -> None:
+        """Set undirected edge (node_a, node_b) to infinity in the distance matrix."""
+        ia = self._node_offset.get(node_a)
+        ib = self._node_offset.get(node_b)
+        if ia is None or ib is None:
+            return
+        self._dist_matrix[ia][ib] = float("inf")
+        self._dist_matrix[ib][ia] = float("inf")
+
+    @abstractmethod
+    def reroute_local(
+        self,
+        depot: Depot,
+        customers: List[Customer],
+    ) -> Solution:
+        """Recompute routes for a single depot handling only the given customers.
+
+        This is intended for fast local rerouting after events (failures).
+        Algorithms that perform cluster-first / route-second can implement
+        optimized local reroute logic here. Return a `Solution`.
+        """
+        ...
 
     @abstractmethod
     def solve(self, customers: List[Customer], depots: List[Depot]) -> Solution:

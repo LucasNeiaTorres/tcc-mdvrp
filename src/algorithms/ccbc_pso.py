@@ -49,17 +49,23 @@ class CCBCPSOAlgorithm(ClusterFirstAlgorithm):
         if cfg is None:
             cfg = load_config()
         self.cfg = cfg
+        self.last_clusters: Dict[int, List[int]] = {}
 
 
     def cluster(
         self, customers: List[Customer], depots: List[Depot]
     ) -> Dict[Depot, List[Customer]]:
         """Phase 1: assign customers to depots via CCBC."""
-        return run_ccbc_clustering(
+        clusters = run_ccbc_clustering(
             customers=customers,
             depots=depots,
             cfg=self.cfg.ccbc,
         )
+        self.last_clusters = {
+            depot.index: [customer.index for customer in assigned]
+            for depot, assigned in clusters.items()
+        }
+        return clusters
 
     def route(self, clusters: Dict[Depot, List[Customer]]) -> Solution:
         """Phase 2: optimise visiting order and vehicle split per depot via PSO."""
@@ -81,3 +87,20 @@ class CCBCPSOAlgorithm(ClusterFirstAlgorithm):
             f"ccbc_iter={self.cfg.ccbc.max_iter}, ccbc_starts={self.cfg.ccbc.n_starts}, "
             f"pso_pop={self.cfg.pso.pop_size}, pso_gen={self.cfg.pso.n_gen})"
         )
+
+    def reroute_local(
+        self,
+        depot: Depot,
+        customers: List[Customer],
+    ) -> Solution:
+        """Reroute only the customers for a single depot using the PSO router.
+
+        Builds a local distance matrix for the depot+customers and runs the
+        PSO-based routing on that subset. Returns a Solution.
+        """
+        return Solution(routes=run_pso_routing(
+            depot=depot,
+            customers=customers,
+            dist_fn=self._dist,
+            cfg=self.cfg.pso,
+        ))

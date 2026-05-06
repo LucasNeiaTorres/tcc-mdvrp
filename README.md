@@ -6,7 +6,8 @@ tcc_mdvrp/
 │
 ├── data/                  # Arquivos de entrada (instâncias)
 │   ├── raw/               # Bases de dados originais
-│   └── processed/         # Bases de dados adaptadas
+│   └── processed/
+│       └── failures/      # Cenários de falhas em JSON gerados por script
 │
 ├── notebooks/             # Exclusivo para Jupyter Notebooks
 │
@@ -27,6 +28,9 @@ tcc_mdvrp/
 │   │   ├── data_loader.py # Lógica para ler os .txt do diretório /data
 │   │   └── metrics.py     # Funções para calcular distância euclidiana, etc
 │   │
+│   ├── scenario/
+│   │   └── generate_failures.py  # Gera eventos de falha aleatórios em JSON
+│   │
 │   └── main.py
 │
 ├── tests/
@@ -38,6 +42,10 @@ tcc_mdvrp/
 
 
 ## Descrição
+
+Projeto para estudo de MDVRP com heurísticas (Greedy, GA+PSO), leitura de
+instâncias de Cordeau e geração de cenários sintéticos de falhas para
+simulações reproduzíveis.
 
 
 ## Pré-requisitos
@@ -75,5 +83,61 @@ Certifique-se de ter o seguinte instalado em seu sistema:
 ## Uso
 
 ```sh
-python3 main.py <arquivo_in>
+python3 src/main.py
 ```
+
+## Geração de falhas em JSON
+
+O script [src/scenario/generate_failures.py](src/scenario/generate_failures.py)
+gera cenários aleatórios de bloqueio de aresta no formato JSON.
+
+### Exemplo
+
+```sh
+python3 src/scenario/generate_failures.py \
+  --instance p01 \
+  --seed 42 \
+  --severity medium \
+  --events 3 \
+  --max-time 120.0
+```
+
+Saída padrão:
+
+```text
+data/processed/failures/p01_seed42.json
+```
+
+### Formato gerado
+
+```json
+{
+  "metadata": {
+    "instance": "p01",
+    "seed": 42,
+    "severity": "medium",
+    "generated_at": "2026-04-12"
+  },
+  "events": [
+    {
+      "trigger_time": 15.5,
+      "type": "edge_block",
+      "node_a": 5,
+      "node_b": 12
+    }
+  ]
+}
+```
+
+### Parâmetros principais
+
+- `--instance`: instância Cordeau usada como base (`p01`, `p23`, etc.).
+- `--seed`: controla reprodutibilidade do sorteio.
+- `--events`: número de eventos de falha gerados.
+- `--max-time`: limite superior para sorteio de `trigger_time`.
+- `--severity`: rótulo de cenário (`low`, `medium`, `high`) salvo em metadata.
+- `--output`: caminho final do JSON (opcional).
+- `--data-file`: caminho explícito para arquivo de instância (opcional).
+
+Observação: no estado atual, `severity` é metadado de cenário e não altera
+automaticamente o número de eventos ou a distribuição temporal.
