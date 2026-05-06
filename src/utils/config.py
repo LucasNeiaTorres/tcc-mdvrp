@@ -13,13 +13,10 @@ import yaml
 
 
 @dataclass
-class GAConfig:
-    pop_size: int
-    n_gen: int
-    capacity_penalty: float
-    crossover_prob: float
-    mutation_eta: int
-    seed: int
+class CCBCConfig:
+    max_iter: int
+    tol: float
+    n_starts: int
 
 
 @dataclass
@@ -35,7 +32,7 @@ class PSOConfig:
 
 @dataclass
 class AppConfig:
-    ga: GAConfig
+    ccbc: CCBCConfig
     pso: PSOConfig
 
 
@@ -56,17 +53,14 @@ def load_config(path: Optional[str] = None) -> AppConfig:
     with open(path, "r") as f:
         raw = yaml.safe_load(f)
 
-    ga_raw = raw["ga"]
+    ccbc_raw = raw["ccbc"]
     pso_raw = raw["pso"]
 
     return AppConfig(
-        ga=GAConfig(
-            pop_size=int(ga_raw["pop_size"]),
-            n_gen=int(ga_raw["n_gen"]),
-            capacity_penalty=float(ga_raw["capacity_penalty"]),
-            crossover_prob=float(ga_raw["crossover_prob"]),
-            mutation_eta=int(ga_raw["mutation_eta"]),
-            seed=int(ga_raw["seed"]),
+        ccbc=CCBCConfig(
+            max_iter=int(ccbc_raw["max_iter"]),
+            tol=float(ccbc_raw["tol"]),
+            n_starts=int(ccbc_raw["n_starts"]),
         ),
         pso=PSOConfig(
             pop_size=int(pso_raw["pop_size"]),

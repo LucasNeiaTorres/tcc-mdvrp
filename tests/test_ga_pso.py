@@ -1,4 +1,4 @@
-"""Unit tests for the GA clustering and PSO routing modules."""
+"""Unit tests for the CCBC clustering and PSO routing modules."""
 
 import math
 
@@ -7,11 +7,11 @@ import pytest
 
 from core.entities import Customer, Depot, Route
 from core.solution import Solution
-from utils.config import GAConfig, PSOConfig, AppConfig
+from utils.config import CCBCConfig, PSOConfig, AppConfig
 
-from algorithms.ga_cluster import DepotAssignmentProblem, run_ga_clustering
+from algorithms.ccbc_cluster import run_ccbc_clustering
 from algorithms.pso_router import RoutingProblem, run_pso_routing
-from algorithms.ga_pso import GAPSOAlgorithm
+from algorithms.ccbc_pso import CCBCPSOAlgorithm
 
 
 # ---------------------------------------------------------------------------
@@ -52,11 +52,8 @@ def dist_fn(depots, customers):
 
 
 @pytest.fixture
-def ga_cfg() -> GAConfig:
-    return GAConfig(
-        pop_size=20, n_gen=30, capacity_penalty=10000.0,
-        crossover_prob=0.9, mutation_eta=20, seed=0,
-    )
+def ccbc_cfg() -> CCBCConfig:
+    return CCBCConfig(max_iter=100, tol=1e-4, n_starts=3)
 
 
 @pytest.fixture
@@ -68,57 +65,54 @@ def pso_cfg() -> PSOConfig:
 
 
 @pytest.fixture
-def app_cfg(ga_cfg, pso_cfg) -> AppConfig:
-    return AppConfig(ga=ga_cfg, pso=pso_cfg)
+def app_cfg(ccbc_cfg, pso_cfg) -> AppConfig:
+    return AppConfig(ccbc=ccbc_cfg, pso=pso_cfg)
 
 
 # ---------------------------------------------------------------------------
-# DepotAssignmentProblem
+# run_ccbc_clustering
 # ---------------------------------------------------------------------------
 
-class TestDepotAssignmentProblem:
-    def test_optimal_assignment_no_penalty(self, depots, customers, dist_fn):
-        """All customers near their closest depot → no capacity violation."""
-        problem = DepotAssignmentProblem(
-            customers=customers,
-            depots=depots,
-            dist_fn=dist_fn,
-            capacity_penalty=10000.0,
-        )
-        # Assign first two to depot 0, last two to depot 1
-        x_good = np.array([0, 0, 1, 1])
-        out_good: dict = {}
-        problem._evaluate(x_good, out_good)
+class TestCCBCClustering:
+    def test_customers_split_by_nearest_depot(self, depots, customers):
+        """Customers near depot 1 should be assigned to depot 1, etc."""
+        cfg = CCBCConfig(max_iter=100, tol=1e-4, n_starts=3)
+        clusters = run_ccbc_clustering(customers=customers, depots=depots, cfg=cfg)
+        depot1_indices = {c.index for c in clusters[depots[0]]}
+        depot2_indices = {c.index for c in clusters[depots[1]]}
+        # Customers 1,2 are near depot 1 (0,0); customers 3,4 near depot 2 (20,20)
+        assert {1, 2}.issubset(depot1_indices)
+        assert {3, 4}.issubset(depot2_indices)
 
-        # Assign all to depot 0 — exceeds capacity (40 > 60? no, 40 ≤ 60, but distances are worse)
-        x_far = np.array([1, 1, 0, 0])
-        out_far: dict = {}
-        problem._evaluate(x_far, out_far)
+    def test_all_customers_assigned(self, depots, customers):
+        """Every customer must appear in exactly one cluster."""
+        cfg = CCBCConfig(max_iter=100, tol=1e-4, n_starts=3)
+        clusters = run_ccbc_clustering(customers=customers, depots=depots, cfg=cfg)
+        assigned = [c for cs in clusters.values() for c in cs]
+        assert len(assigned) == len(customers)
+        assert {c.index for c in assigned} == {c.index for c in customers}
 
-        assert out_good["F"] < out_far["F"]
+    def test_capacity_budget_respected(self, depots):
+        """No cluster should exceed its capacity budget when avoidable."""
+        # 6 customers each with demand=10; each depot has capacity=60 and 1 vehicle
+        # → budget=60 per depot; 3 customers per depot is feasible
+        cs = [Customer(index=i, x=float(i), y=0.0, demand=10, service_time=0) for i in range(1, 7)]
+        cfg = CCBCConfig(max_iter=100, tol=1e-4, n_starts=3)
+        clusters = run_ccbc_clustering(customers=cs, depots=depots, cfg=cfg)
+        for depot, assigned in clusters.items():
+            total = sum(c.demand for c in assigned)
+            budget = depot.max_capacity * depot.max_vehicles
+            assert total <= budget, f"Depot {depot.index} exceeded budget: {total} > {budget}"
 
-    def test_capacity_penalty_applied(self, depots, customers, dist_fn):
-        """Assigning all 4 customers (demand=40) to one depot (capacity=60) is fine;
-        but 7 customers would exceed it — verify penalty grows with excess."""
-        big_customers = [
-            Customer(index=i, x=0.5, y=0.5, demand=15, service_time=0)
-            for i in range(5)
-        ]
-        nodes = {d.index: (d.x, d.y) for d in depots}
-        nodes.update({c.index: (c.x, c.y) for c in big_customers})
-        dfn = lambda a, b: _dist(a, b, nodes)
+    def test_empty_customers(self, depots):
+        cfg = CCBCConfig(max_iter=100, tol=1e-4, n_starts=3)
+        clusters = run_ccbc_clustering(customers=[], depots=depots, cfg=cfg)
+        assert all(v == [] for v in clusters.values())
 
-        problem = DepotAssignmentProblem(
-            customers=big_customers,
-            depots=depots,
-            dist_fn=dfn,
-            capacity_penalty=10000.0,
-        )
-        # All 5 → depot 0: load=75 > max_capacity=60, excess=15
-        x_overload = np.array([0] * 5)
-        out: dict = {}
-        problem._evaluate(x_overload, out)
-        assert out["F"] >= 10000.0 * 15  # at least one full penalty unit
+    def test_returns_all_depots(self, depots, customers):
+        cfg = CCBCConfig(max_iter=100, tol=1e-4, n_starts=3)
+        clusters = run_ccbc_clustering(customers=customers, depots=depots, cfg=cfg)
+        assert set(clusters.keys()) == set(depots)
 
 
 # ---------------------------------------------------------------------------
@@ -185,24 +179,25 @@ class TestRunPSORouting:
 
 
 # ---------------------------------------------------------------------------
-# GAPSOAlgorithm smoke test
+# ---------------------------------------------------------------------------
+# CCBCPSOAlgorithm smoke test
 # ---------------------------------------------------------------------------
 
-class TestGAPSOAlgorithm:
+class TestCCBCPSOAlgorithm:
     def test_solve_returns_solution(self, depots, customers, app_cfg):
-        algo = GAPSOAlgorithm(app_cfg)
+        algo = CCBCPSOAlgorithm(app_cfg)
         solution = algo.solve(customers, depots)
         assert isinstance(solution, Solution)
 
     def test_all_customers_assigned(self, depots, customers, app_cfg):
-        algo = GAPSOAlgorithm(app_cfg)
+        algo = CCBCPSOAlgorithm(app_cfg)
         solution = algo.solve(customers, depots)
         assigned = {c.index for route in solution.routes for c in route.customers}
         expected = {c.index for c in customers}
         assert assigned == expected
 
     def test_cost_is_positive(self, depots, customers, app_cfg):
-        algo = GAPSOAlgorithm(app_cfg)
+        algo = CCBCPSOAlgorithm(app_cfg)
         solution = algo.solve(customers, depots)
         assert solution.total_cost() > 0
 
@@ -222,7 +217,7 @@ class TestGAPSOAlgorithm:
             Customer(index=104, x=4.0, y=0.0, demand=10, service_time=0),
         ]
 
-        algo = GAPSOAlgorithm(app_cfg)
+        algo = CCBCPSOAlgorithm(app_cfg)
         solution = algo.solve(customers, [depot])
 
         assert len(solution.routes) == 2
@@ -237,7 +232,8 @@ class TestGAPSOAlgorithm:
 
 class TestLoadConfig:
     def test_types(self, app_cfg):
-        assert isinstance(app_cfg.ga.pop_size, int)
-        assert isinstance(app_cfg.ga.capacity_penalty, float)
+        assert isinstance(app_cfg.ccbc.max_iter, int)
+        assert isinstance(app_cfg.ccbc.tol, float)
+        assert isinstance(app_cfg.ccbc.n_starts, int)
         assert isinstance(app_cfg.pso.adaptive, bool)
         assert isinstance(app_cfg.pso.c1, float)

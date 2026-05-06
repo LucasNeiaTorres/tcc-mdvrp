@@ -1,10 +1,7 @@
-ga:
-  pop_size: 100
-  n_gen: 200
-  capacity_penalty: 10000.0
-  crossover_prob: 0.9
-  mutation_eta: 20
-  seed: 42
+ccbc:
+  max_iter: 300
+  tol: 1.0e-4
+  n_starts: 5
 
 pso:
   pop_size: 50

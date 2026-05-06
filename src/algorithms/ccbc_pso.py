@@ -1,9 +1,11 @@
 """
-GA+PSO Cluster-first, Route-second algorithm for MDVRP.
+CCBC+PSO Cluster-first, Route-second algorithm for MDVRP.
 
-Phase 1 — Clustering (GA):
-    Each customer is assigned to a depot via a GA that minimises total
-    customer-to-depot distance subject to a capacity penalty.
+Phase 1 — Clustering (CCBC):
+    Each customer is assigned to a depot via Constrained Centroid-Based
+    Clustering (CCBC) — an augmented capacitated k-means with vehicle-level
+    slots, multi-start Voronoi initialisation, and two-phase boundary
+    resolution.
 
 Phase 2 — Routing (PSO + Bellman split):
     Within each depot's cluster a PSO optimises the giant-tour order via SPV
@@ -13,27 +15,28 @@ Phase 2 — Routing (PSO + Bellman split):
 Usage
 -----
     cfg = load_config()
-    algorithm = GAPSOAlgorithm(cfg)
+    algorithm = CCBCPSOAlgorithm(cfg)
     solution = algorithm.solve(customers, depots)
 """
 
 from typing import Dict, List
 
 from algorithms.base import ClusterFirstAlgorithm
-from algorithms.ga_cluster import run_ga_clustering
+from algorithms.ccbc_cluster import run_ccbc_clustering
 from algorithms.pso_router import run_pso_routing
 from core.entities import Customer, Depot
 from core.solution import Solution
 from utils.config import AppConfig, load_config
 
 
-class GAPSOAlgorithm(ClusterFirstAlgorithm):
+class CCBCPSOAlgorithm(ClusterFirstAlgorithm):
     """
-    Cluster-first, route-second MDVRP solver using GA and PSO.
+    Cluster-first, route-second MDVRP solver using CCBC and PSO.
 
     The distance matrix is built once by ``ClusterFirstAlgorithm.solve()``
-    before either phase runs, so both ``cluster()`` and ``route()`` can use
-    ``self._dist()`` for O(1) lookups.
+    before either phase runs, so ``route()`` can use ``self._dist()`` for
+    O(1) lookups.  The CCBC phase uses raw (x, y) coordinates directly
+    for centroid arithmetic.
 
     Parameters
     ----------
@@ -51,12 +54,11 @@ class GAPSOAlgorithm(ClusterFirstAlgorithm):
     def cluster(
         self, customers: List[Customer], depots: List[Depot]
     ) -> Dict[Depot, List[Customer]]:
-        """Phase 1: assign customers to depots via GA."""
-        return run_ga_clustering(
+        """Phase 1: assign customers to depots via CCBC."""
+        return run_ccbc_clustering(
             customers=customers,
             depots=depots,
-            dist_fn=self._dist,
-            cfg=self.cfg.ga,
+            cfg=self.cfg.ccbc,
         )
 
     def route(self, clusters: Dict[Depot, List[Customer]]) -> Solution:
@@ -75,7 +77,7 @@ class GAPSOAlgorithm(ClusterFirstAlgorithm):
 
     def __repr__(self) -> str:
         return (
-            f"GAPSOAlgorithm("
-            f"ga_pop={self.cfg.ga.pop_size}, ga_gen={self.cfg.ga.n_gen}, "
+            f"CCBCPSOAlgorithm("
+            f"ccbc_iter={self.cfg.ccbc.max_iter}, ccbc_starts={self.cfg.ccbc.n_starts}, "
             f"pso_pop={self.cfg.pso.pop_size}, pso_gen={self.cfg.pso.n_gen})"
         )
