@@ -1,0 +1,250 @@
+{
+  "metadata": {
+    "instance": "p01",
+    "seed": 44,
+    "severity": "high",
+    "generated_at": "2026-05-06"
+  },
+  "events": [
+    {
+      "trigger_time": 2.9,
+      "type": "edge_block",
+      "node_a": 28,
+      "node_b": 49
+    },
+    {
+      "trigger_time": 3.0,
+      "type": "edge_block",
+      "node_a": 16,
+      "node_b": 50
+    },
+    {
+      "trigger_time": 4.2,
+      "type": "edge_block",
+      "node_a": 8,
+      "node_b": 33
+    },
+    {
+      "trigger_time": 6.0,
+      "type": "edge_block",
+      "node_a": 37,
+      "node_b": 1
+    },
+    {
+      "trigger_time": 7.3,
+      "type": "edge_block",
+      "node_a": 40,
+      "node_b": 31
+    },
+    {
+      "trigger_time": 11.9,
+      "type": "edge_block",
+      "node_a": 23,
+      "node_b": 37
+    },
+    {
+      "trigger_time": 13.5,
+      "type": "edge_block",
+      "node_a": 19,
+      "node_b": 2
+    },
+    {
+      "trigger_time": 14.0,
+      "type": "edge_block",
+      "node_a": 35,
+      "node_b": 10
+    },
+    {
+      "trigger_time": 15.5,
+      "type": "edge_block",
+      "node_a": 13,
+      "node_b": 9
+    },
+    {
+      "trigger_time": 16.3,
+      "type": "edge_block",
+      "node_a": 42,
+      "node_b": 5
+    },
+    {
+      "trigger_time": 16.4,
+      "type": "edge_block",
+      "node_a": 1,
+      "node_b": 28
+    },
+    {
+      "trigger_time": 16.7,
+      "type": "edge_block",
+      "node_a": 48,
+      "node_b": 3
+    },
+    {
+      "trigger_time": 16.8,
+      "type": "edge_block",
+      "node_a": 13,
+      "node_b": 4
+    },
+    {
+      "trigger_time": 16.9,
+      "type": "edge_block",
+      "node_a": 36,
+      "node_b": 35
+    },
+    {
+      "trigger_time": 19.8,
+      "type": "edge_block",
+      "node_a": 49,
+      "node_b": 39
+    },
+    {
+      "trigger_time": 20.4,
+      "type": "edge_block",
+      "node_a": 8,
+      "node_b": 24
+    },
+    {
+      "trigger_time": 20.7,
+      "type": "edge_block",
+      "node_a": 19,
+      "node_b": 3
+    },
+    {
+      "trigger_time": 21.5,
+      "type": "edge_block",
+      "node_a": 43,
+      "node_b": 21
+    },
+    {
+      "trigger_time": 22.2,
+      "type": "edge_block",
+      "node_a": 42,
+      "node_b": 22
+    },
+    {
+      "trigger_time": 22.8,
+      "type": "edge_block",
+      "node_a": 8,
+      "node_b": 12
+    },
+    {
+      "trigger_time": 27.2,
+      "type": "edge_block",
+      "node_a": 31,
+      "node_b": 41
+    },
+    {
+      "trigger_time": 28.6,
+      "type": "edge_block",
+      "node_a": 7,
+      "node_b": 31
+    },
+    {
+      "trigger_time": 32.5,
+      "type": "edge_block",
+      "node_a": 27,
+      "node_b": 34
+    },
+    {
+      "trigger_time": 36.2,
+      "type": "edge_block",
+      "node_a": 38,
+      "node_b": 49
+    },
+    {
+      "trigger_time": 37.0,
+      "type": "edge_block",
+      "node_a": 22,
+      "node_b": 19
+    },
+    {
+      "trigger_time": 37.6,
+      "type": "edge_block",
+      "node_a": 45,
+      "node_b": 34
+    },
+    {
+      "trigger_time": 38.0,
+      "type": "edge_block",
+      "node_a": 20,
+      "node_b": 45
+    },
+    {
+      "trigger_time": 39.0,
+      "type": "edge_block",
+      "node_a": 1,
+      "node_b": 40
+    },
+    {
+      "trigger_time": 41.0,
+      "type": "edge_block",
+      "node_a": 30,
+      "node_b": 48
+    },
+    {
+      "trigger_time": 41.3,
+      "type": "edge_block",
+      "node_a": 50,
+      "node_b": 33
+    },
+    {
+      "trigger_time": 41.7,
+      "type": "edge_block",
+      "node_a": 48,
+      "node_b": 46
+    },
+    {
+      "trigger_time": 42.6,
+      "type": "edge_block",
+      "node_a": 44,
+      "node_b": 28
+    },
+    {
+      "trigger_time": 43.0,
+      "type": "edge_block",
+      "node_a": 15,
+      "node_b": 39
+    },
+    {
+      "trigger_time": 44.1,
+      "type": "edge_block",
+      "node_a": 12,
+      "node_b": 42
+    },
+    {
+      "trigger_time": 46.0,
+      "type": "edge_block",
+      "node_a": 38,
+      "node_b": 26
+    },
+    {
+      "trigger_time": 49.2,
+      "type": "edge_block",
+      "node_a": 23,
+      "node_b": 40
+    },
+    {
+      "trigger_time": 49.3,
+      "type": "edge_block",
+      "node_a": 7,
+      "node_b": 41
+    },
+    {
+      "trigger_time": 53.0,
+      "type": "edge_block",
+      "node_a": 1,
+      "node_b": 15
+    },
+    {
+      "trigger_time": 57.5,
+      "type": "edge_block",
+      "node_a": 7,
+      "node_b": 18
+    },
+    {
+      "trigger_time": 59.8,
+      "type": "edge_block",
+      "node_a": 17,
+      "node_b": 5
+    }
+  ]
+}

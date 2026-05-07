@@ -13,7 +13,7 @@ from scenario.simulator import run_simulation
 
 def main() -> None:
     base_dir = Path(__file__).parent.parent
-    default_failures_file = base_dir / "data" / "processed" / "failures" / "p01_seed42_events20.json"
+    default_failures_file = base_dir / "data" / "processed" / "failures" / "p01_seed44_events40.json"
 
     parser = argparse.ArgumentParser(description="Run and visualize the MDVRP solver on one instance.")
     parser.add_argument("--instance", default="p01", metavar="NAME", help="Instance name (default: p01).")
@@ -21,7 +21,7 @@ def main() -> None:
         "--failures-file",
         default=str(default_failures_file),
         metavar="PATH",
-        help="Path to the failures JSON file (default: data/processed/failures/p01_seed42_events20.json).",
+        help="Path to the failures JSON file (default: data/processed/failures/p01_seed44_events40.json).",
     )
     args = parser.parse_args()
 
