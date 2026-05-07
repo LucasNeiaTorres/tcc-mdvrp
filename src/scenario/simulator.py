@@ -252,6 +252,11 @@ def run_simulation(
     algorithm: MDVRPAlgorithm
 ):
     current_solution = initial_solution
+    expected_customer_indices = [
+        customer.index
+        for route in initial_solution.routes
+        for customer in route.customers
+    ]
     queue = generate_event_queue(current_solution, failures)
     vehicle_states = _build_vehicle_states(current_solution)
     reroute_count = 0
@@ -288,7 +293,12 @@ def run_simulation(
     
     # Salva json do historico  
     output_path = SIMULATION_LOG_DIR / f"{instance_name}_log.json"
-    save_history_log(str(output_path), instance_name, history_log)
+    save_history_log(
+        str(output_path),
+        instance_name,
+        history_log,
+        expected_customer_indices=expected_customer_indices,
+    )
     print(f"Saved simulation log to {output_path}")
     
     return history_log

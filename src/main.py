@@ -97,19 +97,6 @@ def main() -> int:
         # output_dir=base_dir / "data" / "processed" / "simulations" / data_file.name,
     )
 
-    log_path = SIMULATION_LOG_DIR / f"{data_file.name}_log.json"
-    violations = validate_simulation_log(log_path)
-    if violations:
-        route_id, node_a, node_b, depart_time, arrival_time, block_time = violations[0]
-        print(
-            f"Validation failed: {len(violations)} blocked-edge violation(s) found in {log_path}\n"
-            f"  first violation: route {route_id} used edge {node_a} <-> {node_b} "
-            f"between t={depart_time:.3f}min and t={arrival_time:.3f}min, "
-            f"but it was blocked at t={block_time:.3f}min"
-        )
-
-    print(f"Validation passed: no blocked-edge violations found in {log_path}")
-    
     visualize_comparison(
         instance,
         # [reference_solution, greedy_solution, ga_pso_solution],
@@ -120,6 +107,32 @@ def main() -> int:
             f"GA+PSO (cost: {solution.total_cost():.2f})",
         ],
     )
+    
+    log_path = SIMULATION_LOG_DIR / f"{data_file.name}_log.json"
+    validation_result = validate_simulation_log(log_path)
+    blocked_edge_violations = validation_result["blocked_edge_violations"]
+    unserved_customers = validation_result["unserved_customers"]
+
+    if blocked_edge_violations:
+        route_id, node_a, node_b, depart_time, arrival_time, block_time = blocked_edge_violations[0]
+        print(
+            f"Validation failed: {len(blocked_edge_violations)} blocked-edge violation(s) found in {log_path}\n"
+            f"  first violation: route {route_id} used edge {node_a} <-> {node_b} "
+            f"between t={depart_time:.3f}min and t={arrival_time:.3f}min, "
+            f"but it was blocked at t={block_time:.3f}min"
+        )
+    if unserved_customers:
+        print(
+            f"Validation failed: {len(unserved_customers)} unserved customer(s) found in {log_path}\n"
+            f"  unserved customers: {unserved_customers}"
+        )
+
+    if blocked_edge_violations or unserved_customers:
+        return 1
+
+    print(f"Validation passed: no blocked-edge violations found in {log_path}")
+    print(f"Validation passed: all customers were served in {log_path}")
+    
 
 
 if __name__ == "__main__":

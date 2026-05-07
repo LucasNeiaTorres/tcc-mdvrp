@@ -192,6 +192,7 @@ def save_history_log(
     output_path: str,
     instance_name: str,
     history_log: List[Tuple[float, str, Dict[str, Any]]],
+    expected_customer_indices: List[int] | None = None,
 ) -> Path:
     """Save simulation event history to JSON."""
     out = Path(output_path)
@@ -213,11 +214,15 @@ def save_history_log(
     ]
 
     # Build payload
+    metadata = {
+        "instance": instance_name,
+        "generated_at": datetime.now().isoformat(timespec="seconds"),
+    }
+    if expected_customer_indices is not None:
+        metadata["expected_customer_indices"] = sorted(expected_customer_indices)
+
     payload = {
-        "metadata": {
-            "instance": instance_name,
-            "generated_at": datetime.now().isoformat(timespec="seconds"),
-        },
+        "metadata": metadata,
         "summary": {
             "total_events": len(history_log),
             "event_counts_by_type": event_counts,

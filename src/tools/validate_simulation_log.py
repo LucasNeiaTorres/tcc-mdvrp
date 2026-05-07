@@ -72,6 +72,14 @@ def extract_routes(events: Iterable[dict]) -> Dict[int, List[Tuple[int, int, flo
     return routes
 
 
+def extract_expected_customers(data: dict) -> set[int] | None:
+    metadata = data.get("metadata", {})
+    expected = metadata.get("expected_customer_indices")
+    if expected is None:
+        return None
+    return {int(node_index) for node_index in expected}
+
+
 def find_violations(blocked: Dict[frozenset, float], routes: Dict[int, List[Tuple[int, int, float, float | None]]]):
     """Yield violations as tuples (route_id, from_node, to_node, depart_time, arrive_time, block_time)."""
     for route_id, seq in routes.items():
@@ -90,13 +98,48 @@ def find_violations(blocked: Dict[frozenset, float], routes: Dict[int, List[Tupl
             depart_time = service_end_time if service_end_time is not None else arrival_time
 
 
-def validate_simulation_log(log_path: Path) -> list[tuple[int, int, int, float, float, float]]:
-    """Return the blocked-edge violations found in a simulation log."""
+def find_unserved_customers(
+    events: Iterable[dict],
+    expected_customers: set[int] | None = None,
+) -> list[int]:
+    arrived_customers: set[int] = set()
+    serviced_customers: set[int] = set()
+
+    for ev in events:
+        payload = ev.get("payload", {})
+        node_index = payload.get("node_index")
+        if node_index is None:
+            continue
+
+        node_index = int(node_index)
+        if node_index == 0 or payload.get("is_return_to_depot", False):
+            continue
+
+        if ev.get("type") == "arrival":
+            arrived_customers.add(node_index)
+        elif ev.get("type") == "service_end":
+            serviced_customers.add(node_index)
+
+    unserved_customers = arrived_customers - serviced_customers
+    if expected_customers is not None:
+        unserved_customers |= expected_customers - arrived_customers
+
+    return sorted(unserved_customers)
+
+
+def validate_simulation_log(log_path: Path) -> dict:
+    """Return blocked-edge violations and unserved customers found in a simulation log."""
     data = load_log(log_path)
     events = data.get("events", [])
     blocked = extract_blocked_edges(events)
     routes = extract_routes(events)
-    return list(find_violations(blocked, routes))
+    blocked_edge_violations = list(find_violations(blocked, routes))
+    expected_customers = extract_expected_customers(data)
+    unserved_customers = find_unserved_customers(events, expected_customers)
+    return {
+        "blocked_edge_violations": blocked_edge_violations,
+        "unserved_customers": unserved_customers,
+    }
 
 
 def main() -> int:
@@ -120,20 +163,29 @@ def main() -> int:
     events = data.get("events", [])
     blocked = extract_blocked_edges(events)
     routes = extract_routes(events)
-    violations = validate_simulation_log(log_path)
+    validation_result = validate_simulation_log(log_path)
+    blocked_edge_violations = validation_result["blocked_edge_violations"]
+    unserved_customers = validation_result["unserved_customers"]
 
     print(f"Loaded log: {log_path}")
     print(f"Blocked edges: {len(blocked)}")
     print(f"Routes found: {len(routes)}")
-    print(f"Violations: {len(violations)}")
+    print(f"Blocked-edge violations: {len(blocked_edge_violations)}")
+    print(f"Unserved customers: {len(unserved_customers)}")
 
-    if violations:
-        print("\nViolations detected:\n")
-        for r_id, a, b, depart, arrival, btime in violations:
+    if blocked_edge_violations:
+        print("\nBlocked-edge violations detected:\n")
+        for r_id, a, b, depart, arrival, btime in blocked_edge_violations:
             print(
                 f"Route {r_id}: traversed edge {a} <-> {b} between t={depart:.3f}min and t={arrival:.3f}min "
                 f"but it was blocked at t={btime:.3f}min"
             )
+
+    if unserved_customers:
+        print("\nUnserved customers detected:\n")
+        print(f"Customers not served: {unserved_customers}")
+
+    if blocked_edge_violations or unserved_customers:
         return 1
 
     print("No violations found.")
