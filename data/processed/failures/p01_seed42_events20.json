@@ -1,0 +1,130 @@
+{
+  "metadata": {
+    "instance": "p01",
+    "seed": 42,
+    "severity": "high",
+    "generated_at": "2026-05-06"
+  },
+  "events": [
+    {
+      "trigger_time": 1.5,
+      "type": "edge_block",
+      "node_a": 41,
+      "node_b": 8
+    },
+    {
+      "trigger_time": 5.6,
+      "type": "edge_block",
+      "node_a": 3,
+      "node_b": 2
+    },
+    {
+      "trigger_time": 5.6,
+      "type": "edge_block",
+      "node_a": 22,
+      "node_b": 7
+    },
+    {
+      "trigger_time": 11.5,
+      "type": "edge_block",
+      "node_a": 24,
+      "node_b": 37
+    },
+    {
+      "trigger_time": 13.4,
+      "type": "edge_block",
+      "node_a": 18,
+      "node_b": 16
+    },
+    {
+      "trigger_time": 16.7,
+      "type": "edge_block",
+      "node_a": 29,
+      "node_b": 38
+    },
+    {
+      "trigger_time": 20.4,
+      "type": "edge_block",
+      "node_a": 45,
+      "node_b": 28
+    },
+    {
+      "trigger_time": 25.2,
+      "type": "edge_block",
+      "node_a": 45,
+      "node_b": 35
+    },
+    {
+      "trigger_time": 32.2,
+      "type": "edge_block",
+      "node_a": 47,
+      "node_b": 30
+    },
+    {
+      "trigger_time": 33.1,
+      "type": "edge_block",
+      "node_a": 25,
+      "node_b": 6
+    },
+    {
+      "trigger_time": 35.4,
+      "type": "edge_block",
+      "node_a": 35,
+      "node_b": 6
+    },
+    {
+      "trigger_time": 36.1,
+      "type": "edge_block",
+      "node_a": 15,
+      "node_b": 33
+    },
+    {
+      "trigger_time": 39.7,
+      "type": "edge_block",
+      "node_a": 5,
+      "node_b": 3
+    },
+    {
+      "trigger_time": 40.6,
+      "type": "edge_block",
+      "node_a": 48,
+      "node_b": 7
+    },
+    {
+      "trigger_time": 43.0,
+      "type": "edge_block",
+      "node_a": 36,
+      "node_b": 13
+    },
+    {
+      "trigger_time": 48.3,
+      "type": "edge_block",
+      "node_a": 1,
+      "node_b": 49
+    },
+    {
+      "trigger_time": 48.4,
+      "type": "edge_block",
+      "node_a": 39,
+      "node_b": 17
+    },
+    {
+      "trigger_time": 50.8,
+      "type": "edge_block",
+      "node_a": 7,
+      "node_b": 23
+    },
+    {
+      "trigger_time": 53.1,
+      "type": "edge_block",
+      "node_a": 41,
+      "node_b": 40
+    },
+    {
+      "trigger_time": 57.4,
+      "type": "edge_block",
+      "node_a": 10,
+      "node_b": 14
+    }
+  ]
+}

@@ -1,4 +1,5 @@
 import argparse
+from pathlib import Path
 
 from algorithms.greedy import GreedyAlgorithm
 from algorithms.ccbc_pso import CCBCPSOAlgorithm
@@ -8,12 +9,20 @@ from utils.data_loader import read_cordeau_data_file, read_cordeau_solution_file
 from utils.results_io import save_clustering_result, save_routing_result
 from utils.visualizer import visualize_instance, visualize_comparison
 from scenario.simulator import run_simulation
-from pathlib import Path
 
 
 def main() -> None:
+    base_dir = Path(__file__).parent.parent
+    default_failures_file = base_dir / "data" / "processed" / "failures" / "p01_seed42_events20.json"
+
     parser = argparse.ArgumentParser(description="Run and visualize the MDVRP solver on one instance.")
     parser.add_argument("--instance", default="p01", metavar="NAME", help="Instance name (default: p01).")
+    parser.add_argument(
+        "--failures-file",
+        default=str(default_failures_file),
+        metavar="PATH",
+        help="Path to the failures JSON file (default: data/processed/failures/p01_seed42_events20.json).",
+    )
     args = parser.parse_args()
 
     loaded = load_instance(args.instance)
@@ -22,10 +31,9 @@ def main() -> None:
     reference_solution = loaded.reference
     
     """Load p01, run the greedy algorithm and visualize the result."""
-    base_dir = Path(__file__).parent.parent
     data_file = base_dir / "data" / "raw" / "cordeau" / "p01"
     solution_file = base_dir / "data" / "raw" / "cordeau_sol" / "p01.res"
-    failures_file = base_dir / "data" / "processed" / "failures" / "p01_seed42_events2.json"
+    failures_file = Path(args.failures_file)
 
     # Load raw instance and reference solution
     instance = read_cordeau_data_file(str(data_file))
