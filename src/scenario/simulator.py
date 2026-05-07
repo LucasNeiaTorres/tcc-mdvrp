@@ -442,7 +442,21 @@ def _handle_disaster(
     # Ask the algorithm to reroute locally for the depot
     broken_edge = _normalize_edge(node_a, node_b)
     algorithm._build_matrix([routing_depot], pending_customers)
-    algorithm._set_edge_inf(*broken_edge)
+    # When we used a virtual routing_depot (u-turn case) the local node ids
+    # in the algorithm's matrix include the virtual depot index instead of
+    # the original from-node index. In that case block the edge using the
+    # virtual depot index so the local router cannot use the broken link.
+    if routing_depot.index < 0:
+        # determine which of node_a/node_b is the from-node for this leg
+        if leg is not None:
+            from_idx, to_idx = leg
+        else:
+            # fallback: assume node_a is the from-node
+            from_idx, to_idx = node_a, node_b
+        other = node_b if node_a == from_idx else node_a
+        algorithm._set_edge_inf(routing_depot.index, other)
+    else:
+        algorithm._set_edge_inf(*broken_edge)
     if pending_customers:
         reroute_solution = algorithm.reroute_local(routing_depot, pending_customers)
     else:

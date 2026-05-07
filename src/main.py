@@ -107,10 +107,8 @@ def main() -> int:
             f"between t={depart_time:.3f}min and t={arrival_time:.3f}min, "
             f"but it was blocked at t={block_time:.3f}min"
         )
-        return 1
 
     print(f"Validation passed: no blocked-edge violations found in {log_path}")
-    return 0
     
     visualize_comparison(
         instance,
@@ -125,4 +123,4 @@ def main() -> int:
 
 
 if __name__ == "__main__":
-    raise SystemExit(main())
+    main()

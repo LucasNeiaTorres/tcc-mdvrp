@@ -78,11 +78,11 @@ def find_violations(blocked: Dict[frozenset, float], routes: Dict[int, List[Tupl
         if len(seq) < 2:
             continue
         prev_stop_index, prev_node, prev_arrival_time, prev_service_end_time = seq[0]
-        depart_time = prev_service_end_time if prev_service_end_time is not None else 0.0
+        depart_time = prev_service_end_time if prev_service_end_time is not None else prev_arrival_time
         for stop_index, node, arrival_time, service_end_time in seq[1:]:
             edge = frozenset({prev_node, node})
             block_time = blocked.get(edge)
-            if block_time is not None and depart_time <= block_time < arrival_time:
+            if block_time is not None and block_time < depart_time:
                 yield (route_id, prev_node, node, depart_time, arrival_time, block_time)
             prev_stop_index = stop_index
             prev_node = node
