@@ -8,10 +8,11 @@ from utils.converter import build_customers, build_depots, load_instance
 from utils.data_loader import read_cordeau_data_file, read_cordeau_solution_file, read_failures_file
 from utils.results_io import save_clustering_result, save_routing_result
 from utils.visualizer import visualize_instance, visualize_comparison
-from scenario.simulator import run_simulation
+from scenario.simulator import SIMULATION_LOG_DIR, run_simulation
+from tools.validate_simulation_log import validate_simulation_log
 
 
-def main() -> None:
+def main() -> int:
     base_dir = Path(__file__).parent.parent
     default_failures_file = base_dir / "data" / "processed" / "failures" / "p01_seed44_events40.json"
 
@@ -95,6 +96,21 @@ def main() -> None:
         algorithm=algorithm
         # output_dir=base_dir / "data" / "processed" / "simulations" / data_file.name,
     )
+
+    log_path = SIMULATION_LOG_DIR / f"{data_file.name}_log.json"
+    violations = validate_simulation_log(log_path)
+    if violations:
+        route_id, node_a, node_b, depart_time, arrival_time, block_time = violations[0]
+        print(
+            f"Validation failed: {len(violations)} blocked-edge violation(s) found in {log_path}\n"
+            f"  first violation: route {route_id} used edge {node_a} <-> {node_b} "
+            f"between t={depart_time:.3f}min and t={arrival_time:.3f}min, "
+            f"but it was blocked at t={block_time:.3f}min"
+        )
+        return 1
+
+    print(f"Validation passed: no blocked-edge violations found in {log_path}")
+    return 0
     
     visualize_comparison(
         instance,
@@ -109,4 +125,4 @@ def main() -> None:
 
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main())

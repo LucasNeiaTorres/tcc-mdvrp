@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 import heapq
 from itertools import count
+from pathlib import Path
 from typing import Any, List, Tuple
 
 from core.entities import Customer, Depot, Route
@@ -15,6 +16,7 @@ from .state import VehicleState, _normalize_edge
 
 UNIT_SPEED = 1.0
 _EVENT_SEQ = count()
+SIMULATION_LOG_DIR = Path(__file__).resolve().parents[2] / "data" / "processed" / "simulation_logs"
 
 
 @dataclass(frozen=True)
@@ -285,8 +287,8 @@ def run_simulation(
     
     
     # Salva json do historico  
-    output_path = f"data/processed/simulation_logs/{instance_name}_log.json"
-    save_history_log(output_path, instance_name, history_log)
+    output_path = SIMULATION_LOG_DIR / f"{instance_name}_log.json"
+    save_history_log(str(output_path), instance_name, history_log)
     print(f"Saved simulation log to {output_path}")
     
     return history_log
