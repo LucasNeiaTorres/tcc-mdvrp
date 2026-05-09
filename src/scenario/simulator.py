@@ -301,7 +301,7 @@ def run_simulation(
     )
     print(f"Saved simulation log to {output_path}")
     
-    return history_log
+    return current_solution, history_log
     
     
 def _handle_arrival(
@@ -499,15 +499,23 @@ def _handle_disaster(
         wasted_travel_distance=wasted_travel_distance,
     )
 
-    current_solution.routes[affected_route - 1] = new_route
+    # Build a combined route that preserves already executed customers
+    # (so visualization and saved solution reflect executed path + rerouted remainder)
+    executed_count = max(0, affected_vehicle_state.next_stop_index - 1)
+    executed_customers = original_route.customers[:executed_count]
+    combined_customers = [*executed_customers, *new_route.customers]
+    combined_route = Route(depot=original_route.depot, customers=combined_customers)
 
-    # Apply the new route to the affected vehicle state
-    affected_vehicle_state.route = new_route
-    affected_vehicle_state.customers_by_index = {c.index: c for c in new_route.customers}
+    current_solution.routes[affected_route - 1] = combined_route
+
+    # Apply the combined route to the affected vehicle state
+    affected_vehicle_state.route = combined_route
+    affected_vehicle_state.customers_by_index = {c.index: c for c in combined_route.customers}
     affected_vehicle_state.pending_customer_ids = {
-        c.index for c in new_route.customers
+        c.index for c in combined_route.customers
     } - affected_vehicle_state.visited_customer_ids
-    affected_vehicle_state.next_stop_index = 1
+    # Set next_stop_index to point to the next pending customer in the combined route
+    affected_vehicle_state.next_stop_index = executed_count + 1
 
     reroute_index = reroute_count + 1
     time_tag = int(round(current_time * 100))

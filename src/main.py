@@ -88,7 +88,7 @@ def main() -> int:
         ],
     )
     
-    run_simulation(
+    simulated_solution, history_log = run_simulation(
         # instance=instance,
         initial_solution=solution,
         failures=failures,
@@ -100,11 +100,11 @@ def main() -> int:
     visualize_comparison(
         instance,
         # [reference_solution, greedy_solution, ga_pso_solution],
-        [reference_solution, solution],
+        [reference_solution, simulated_solution],
         titles=[
             f"Reference (obj: {reference_solution.objective:.2f})",
             # f"Greedy (cost: {greedy_solution.total_cost():.2f})",
-            f"GA+PSO (cost: {solution.total_cost():.2f})",
+            f"GA+PSO after simulation (cost: {simulated_solution.total_cost():.2f})",
         ],
     )
     
