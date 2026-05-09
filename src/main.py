@@ -14,15 +14,15 @@ from tools.validate_simulation_log import validate_simulation_log
 
 def main() -> int:
     base_dir = Path(__file__).parent.parent
-    default_failures_file = base_dir / "data" / "processed" / "failures" / "p01_seed44_events40.json"
+    default_failures_file = None
 
     parser = argparse.ArgumentParser(description="Run and visualize the MDVRP solver on one instance.")
     parser.add_argument("--instance", default="p01", metavar="NAME", help="Instance name (default: p01).")
     parser.add_argument(
         "--failures-file",
-        default=str(default_failures_file),
+        default=default_failures_file,
         metavar="PATH",
-        help="Path to the failures JSON file (default: data/processed/failures/p01_seed44_events40.json).",
+        help="Path to the failures JSON file (default: auto-detected for the selected instance).",
     )
     args = parser.parse_args()
 
@@ -30,11 +30,20 @@ def main() -> int:
     customers = loaded.customers
     depots = loaded.depots
     reference_solution = loaded.reference
-    
-    """Load p01, run the greedy algorithm and visualize the result."""
-    data_file = base_dir / "data" / "raw" / "cordeau" / "p01"
-    solution_file = base_dir / "data" / "raw" / "cordeau_sol" / "p01.res"
-    failures_file = Path(args.failures_file)
+
+    """Load the selected instance, run the algorithm and visualize the result."""
+    data_file = base_dir / "data" / "raw" / "cordeau" / args.instance
+    solution_file = base_dir / "data" / "raw" / "cordeau_sol" / f"{args.instance}.res"
+    if args.failures_file is not None:
+        failures_file = Path(args.failures_file)
+    else:
+        failures_dir = base_dir / "data" / "processed" / "failures"
+        default_failure_candidates = sorted(failures_dir.glob(f"{args.instance}_*.json"))
+        if not default_failure_candidates:
+            raise FileNotFoundError(
+                f"No failures file found for instance {args.instance} in {failures_dir}"
+            )
+        failures_file = default_failure_candidates[-1]
 
     # Load raw instance and reference solution
     instance = read_cordeau_data_file(str(data_file))
