@@ -260,8 +260,8 @@ def run_simulation(
     queue = generate_event_queue(current_solution, failures)
     vehicle_states = _build_vehicle_states(current_solution)
     reroute_count = 0
-    
     history_log = []
+    total_wasted_distance = 0.0
     current_time = 0.0
     
     while queue:
@@ -279,7 +279,7 @@ def run_simulation(
             _handle_service_end(event, current_time, vehicle_states)
             
         elif event.type == "edge_block":
-            reroute_count += _handle_disaster(
+            reroute_inc, wasted = _handle_disaster(
                 event,
                 current_time,
                 queue,
@@ -289,6 +289,8 @@ def run_simulation(
                 instance_name,
                 reroute_count,
             )
+            reroute_count += reroute_inc
+            total_wasted_distance += wasted
     
     
     # Salva json do historico  
@@ -300,7 +302,70 @@ def run_simulation(
         expected_customer_indices=expected_customer_indices,
     )
     print(f"Saved simulation log to {output_path}")
-    
+
+    # Compute realized cost: sum of current solution routes + wasted travel
+    planned_cost = float(current_solution.total_cost())
+    realized_cost = planned_cost + float(total_wasted_distance)
+
+    # Compute visited / unserved customers from vehicle states
+    visited = set()
+    for vs in vehicle_states.values():
+        visited |= set(vs.visited_customer_ids)
+    expected_set = set(expected_customer_indices)
+    unserved_customers = sorted(list(expected_set - visited))
+
+    # Collect broken edges from history_log and check if any current route still uses them
+    broken_edges: set[tuple[int, int]] = set()
+    for _, etype, payload in history_log:
+        if etype == "edge_block":
+            broken_edges.add(_normalize_edge(payload["node_a"], payload["node_b"]))
+
+    routes_using_broken: list[int] = []
+    for i, route in enumerate(current_solution.routes, start=1):
+        nodes = [route.depot.index] + [c.index for c in route.customers] + [route.depot.index]
+        for a, b in zip(nodes, nodes[1:]):
+            if _normalize_edge(a, b) in broken_edges:
+                routes_using_broken.append(i)
+                break
+
+    feasible_now = current_solution.is_feasible()
+    feasible_considering_broken = feasible_now and len(routes_using_broken) == 0
+
+    # Print final summary
+    print("--- Simulation summary ---")
+    print(f"Planned total cost : {planned_cost:.2f}")
+    print(f"Realized total cost: {realized_cost:.2f} (wasted: {total_wasted_distance:.2f})")
+    print(f"Reroute operations  : {reroute_count}")
+    if unserved_customers:
+        print(f"Unserved customers  : {unserved_customers}")
+    else:
+        print("Unserved customers  : none")
+    print(f"Feasible (routes)   : {feasible_now}")
+    print(f"Feasible (w/ broken): {feasible_considering_broken}")
+    if routes_using_broken:
+        print(f"Routes using broken edges: {routes_using_broken}")
+
+    # Also save a small summary file next to the history log
+    try:
+        summary_path = SIMULATION_LOG_DIR / f"{instance_name}_summary.json"
+        import json
+        summary = {
+            "instance": instance_name,
+            "planned_total_cost": planned_cost,
+            "realized_total_cost": realized_cost,
+            "wasted_travel_distance": total_wasted_distance,
+            "reroute_count": reroute_count,
+            "unserved_customers": unserved_customers,
+            "feasible": feasible_now,
+            "feasible_considering_broken": feasible_considering_broken,
+            "routes_using_broken": routes_using_broken,
+        }
+        with summary_path.open("w", encoding="utf-8") as sf:
+            json.dump(summary, sf, indent=2)
+        print(f"Saved simulation summary to {summary_path}")
+    except Exception:
+        pass
+
     return current_solution, history_log
     
     
@@ -370,13 +435,13 @@ def _handle_disaster(
     algorithm: MDVRPAlgorithm,
     instance_name: str,
     reroute_count: int,
-) -> int:
+) -> tuple[int, float]:
     node_a = event.payload["node_a"]
     node_b = event.payload["node_b"]
     
     affected_route = _find_affected_route_by_broken_edge(node_a, node_b, vehicle_states)
     if affected_route is None:
-        return 0
+        return 0, 0.0
     
     affected_vehicle_state = vehicle_states[affected_route]
     original_route = affected_vehicle_state.route
@@ -476,7 +541,7 @@ def _handle_disaster(
     )
     if not reroute_solution.routes:
         print("Reroute local returned no routes; keeping original route.")
-        return 0
+        return 0, 0.0
 
     if len(reroute_solution.routes) > 1:
         print("Reroute local returned multiple routes; using the first one for now.")
@@ -626,13 +691,14 @@ def _handle_disaster(
             _insert_events(queue, [service_end_event] + future_events)
     
     # TODO: proximos passos:
+    # Validar se custo total esta correto
     # Fazer caso de rua cair enquanto veiculo esta nela (copilot agr)
     # Testes com mais de um veiculo afetado (ex: bloqueio entre dois clientes que estão em rotas diferentes)
     # Testar caso de bloqueio acontecer enquanto veiculo esta parado no cliente (ex: bloqueio entre cliente e depot)
     # Testar caso de bloqueio acontecer enquanto veiculo esta durante viagem na rua quebrada e quando for futura tambem
     # Implementar logica se reroute sugerido for muito pior que original (ex: aumento de custo > 20%), ai rotear tudo do zero e talvez reclusterizar os clientes
     # Deixar codigo mais limpo e organizado, esse py esta ficando grande, talvez separar funcoes de events, handle disaster tambem esta grande
-    return 1
+    return 1, wasted_travel_distance
 
 
 def _build_reroute_vehicle_payload(
