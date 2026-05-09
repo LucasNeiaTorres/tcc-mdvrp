@@ -252,6 +252,8 @@ def run_simulation(
     algorithm: MDVRPAlgorithm
 ):
     current_solution = initial_solution
+    original_solution_cost = float(initial_solution.total_cost())
+    
     expected_customer_indices = [
         customer.index
         for route in initial_solution.routes
@@ -303,9 +305,11 @@ def run_simulation(
     )
     print(f"Saved simulation log to {output_path}")
 
-    # Compute realized cost: sum of current solution routes + wasted travel
-    planned_cost = float(current_solution.total_cost())
-    realized_cost = planned_cost + float(total_wasted_distance)
+    # Compute cost metrics
+    post_reroute_cost = float(current_solution.total_cost())
+    reroute_cost_increase = post_reroute_cost - original_solution_cost
+    realized_cost = post_reroute_cost + float(total_wasted_distance)
+    total_cost_impact = realized_cost - original_solution_cost
 
     # Compute visited / unserved customers from vehicle states
     visited = set()
@@ -333,15 +337,17 @@ def run_simulation(
 
     # Print final summary
     print("--- Simulation summary ---")
-    print(f"Planned total cost : {planned_cost:.2f}")
-    print(f"Realized total cost: {realized_cost:.2f} (wasted: {total_wasted_distance:.2f})")
-    print(f"Reroute operations  : {reroute_count}")
+    print(f"Original solution cost  : {original_solution_cost:.2f}")
+    print(f"Post-reroute cost       : {post_reroute_cost:.2f} (change: {reroute_cost_increase:+.2f})")
+    print(f"Wasted (U-turns)        : {total_wasted_distance:.2f}")
+    print(f"Realized total cost     : {realized_cost:.2f} (total impact: {total_cost_impact:+.2f})")
+    print(f"Reroute operations      : {reroute_count}")
     if unserved_customers:
-        print(f"Unserved customers  : {unserved_customers}")
+        print(f"Unserved customers      : {unserved_customers}")
     else:
-        print("Unserved customers  : none")
-    print(f"Feasible (routes)   : {feasible_now}")
-    print(f"Feasible (w/ broken): {feasible_considering_broken}")
+        print("Unserved customers      : none")
+    print(f"Feasible (routes)       : {feasible_now}")
+    print(f"Feasible (w/ broken)    : {feasible_considering_broken}")
     if routes_using_broken:
         print(f"Routes using broken edges: {routes_using_broken}")
 
@@ -351,9 +357,12 @@ def run_simulation(
         import json
         summary = {
             "instance": instance_name,
-            "planned_total_cost": planned_cost,
-            "realized_total_cost": realized_cost,
+            "original_solution_cost": original_solution_cost,
+            "post_reroute_cost": post_reroute_cost,
+            "reroute_cost_increase": reroute_cost_increase,
             "wasted_travel_distance": total_wasted_distance,
+            "realized_total_cost": realized_cost,
+            "total_cost_impact": total_cost_impact,
             "reroute_count": reroute_count,
             "unserved_customers": unserved_customers,
             "feasible": feasible_now,
