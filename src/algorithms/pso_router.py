@@ -102,6 +102,7 @@ def bellman_split(
 class RoutingProblem(ElementwiseProblem):
     """
     SPV-encoded route optimisation problem for pymoo PSO.
+    Solves standard VRP: depot -> customers -> depot.
 
     Parameters
     ----------
@@ -129,18 +130,78 @@ class RoutingProblem(ElementwiseProblem):
         self.depot = depot
         self.customers = customers
         self.dist_fn = dist_fn
+        self.start_node = depot
+        self.end_depot = depot
 
     def _evaluate(self, x: np.ndarray, out: dict, *args, **kwargs) -> None:
         perm = np.argsort(x)
         ordered = [self.customers[i] for i in perm]
-        segments = bellman_split(ordered, self.depot, self.dist_fn)
+        segments = bellman_split(ordered, self.end_depot, self.dist_fn)
 
         total = 0.0
         for seg in segments:
-            total += self.dist_fn(self.depot.index, seg[0].index)
+            total += self.dist_fn(self.start_node.index, seg[0].index)
             for i in range(len(seg) - 1):
                 total += self.dist_fn(seg[i].index, seg[i + 1].index)
-            total += self.dist_fn(seg[-1].index, self.depot.index)
+            total += self.dist_fn(seg[-1].index, self.end_depot.index)
+
+        out["F"] = total
+
+
+class DynamicRoutingProblem(ElementwiseProblem):
+    """
+    SPV-encoded route optimisation for VRP-OD (origin-destination).
+    Solves dynamic reroute: current_node -> customers -> real_depot.
+
+    Parameters
+    ----------
+    current_start_node:
+        Current position of vehicle (Customer or Depot), NOT the original depot.
+    pending_customers:
+        Customers still to be served.
+    real_end_depot:
+        The original depot where the route must end.
+    dist_fn:
+        Callable ``(a_index, b_index) -> float`` returning pre-computed distance.
+    """
+
+    def __init__(
+        self,
+        current_start_node: Customer | Depot,
+        pending_customers: List[Customer],
+        real_end_depot: Depot,
+        dist_fn: Callable[[int, int], float],
+    ) -> None:
+        super().__init__(
+            n_var=len(pending_customers),
+            n_obj=1,
+            xl=0.0,
+            xu=1.0,
+        )
+        self.current_start_node = current_start_node
+        self.pending_customers = pending_customers
+        self.real_end_depot = real_end_depot
+        self.dist_fn = dist_fn
+
+    def _evaluate(self, x: np.ndarray, out: dict, *args, **kwargs) -> None:
+        """Evaluate cost of a route from current_start_node -> customers -> real_end_depot."""
+        if len(self.pending_customers) == 0:
+            # No customers: just return to depot
+            total = self.dist_fn(self.current_start_node.index, self.real_end_depot.index)
+            out["F"] = total
+            return
+
+        perm = np.argsort(x)
+        ordered = [self.pending_customers[i] for i in perm]
+
+        total = 0.0
+        # 1. From current location to first customer
+        total += self.dist_fn(self.current_start_node.index, ordered[0].index)
+        # 2. Between customers
+        for i in range(len(ordered) - 1):
+            total += self.dist_fn(ordered[i].index, ordered[i + 1].index)
+        # 3. From last customer to real depot (NOT back to current node)
+        total += self.dist_fn(ordered[-1].index, self.real_end_depot.index)
 
         out["F"] = total
 
@@ -226,3 +287,67 @@ def run_pso_routing(
     segments = bellman_split(ordered_customers, depot, dist_fn)
     # return [Route(depot=depot, customers=seg) for seg in segments]
     return [Route(depot=depot, customers=two_opt(seg, depot, dist_fn)) for seg in segments]
+
+
+def run_pso_reroute(
+    current_start_node: Customer | Depot,
+    pending_customers: List[Customer],
+    real_end_depot: Depot,
+    dist_fn: Callable[[int, int], float],
+    cfg: PSOConfig,
+) -> List[Route]:
+    """
+    Run PSO for dynamic reroute scenario (VRP-OD: origin-destination).
+    Vehicle is at current_start_node and must visit pending_customers, then return to real_end_depot.
+    This reroute is for a single vehicle, so it returns one open route.
+
+    Parameters
+    ----------
+    current_start_node:
+        Current vehicle position (Customer or Depot, NOT necessarily the original depot).
+    pending_customers:
+        Customers still to be served.
+    real_end_depot:
+        The original depot where the route must terminate.
+    dist_fn:
+        Pre-computed O(1) distance callable.
+    cfg:
+        PSOConfig loaded from config.yaml.
+
+    Returns
+    -------
+    List of Routes optimized for the dynamic scenario. For reroute, this is a
+    single route: current_start_node -> ordered customers -> real_end_depot.
+    """
+    if not pending_customers:
+        return []
+
+    if len(pending_customers) == 1:
+        return [Route(depot=real_end_depot, customers=list(pending_customers))]
+
+    problem = DynamicRoutingProblem(
+        current_start_node=current_start_node,
+        pending_customers=pending_customers,
+        real_end_depot=real_end_depot,
+        dist_fn=dist_fn,
+    )
+
+    algorithm = PSO(
+        pop_size=cfg.pop_size,
+        w=cfg.inertia,
+        c1=cfg.c1,
+        c2=cfg.c2,
+        adaptive=cfg.adaptive,
+    )
+
+    result = minimize(
+        problem,
+        algorithm,
+        termination=("n_gen", cfg.n_gen),
+        seed=cfg.seed,
+        verbose=False,
+    )
+
+    perm = np.argsort(result.X)
+    ordered_customers = [pending_customers[i] for i in perm]
+    return [Route(depot=real_end_depot, customers=ordered_customers)]

@@ -23,7 +23,7 @@ from typing import Dict, List
 
 from algorithms.base import ClusterFirstAlgorithm
 from algorithms.ccbc_cluster import run_ccbc_clustering
-from algorithms.pso_router import run_pso_routing
+from algorithms.pso_router import run_pso_routing, run_pso_reroute
 from core.entities import Customer, Depot
 from core.solution import Solution
 from utils.config import AppConfig, load_config
@@ -90,17 +90,20 @@ class CCBCPSOAlgorithm(ClusterFirstAlgorithm):
 
     def reroute_local(
         self,
-        depot: Depot,
-        customers: List[Customer],
+        current_start_node: Customer | Depot,
+        pending_customers: List[Customer],
+        real_end_depot: Depot,
     ) -> Solution:
-        """Reroute only the customers for a single depot using the PSO router.
+        """Reroute for dynamic scenario (VRP-OD): from current_start_node to real_end_depot.
 
-        Builds a local distance matrix for the depot+customers and runs the
-        PSO-based routing on that subset. Returns a Solution.
+        Uses PSO to optimize the order of pending_customers starting from the
+        vehicle's current position (not the original depot) and terminating at
+        the real depot. This is mathematically correct for dynamic rerouting.
         """
-        return Solution(routes=run_pso_routing(
-            depot=depot,
-            customers=customers,
+        return Solution(routes=run_pso_reroute(
+            current_start_node=current_start_node,
+            pending_customers=pending_customers,
+            real_end_depot=real_end_depot,
             dist_fn=self._dist,
             cfg=self.cfg.pso,
         ))

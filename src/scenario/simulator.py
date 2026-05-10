@@ -487,7 +487,6 @@ def _handle_disaster(
     # If the vehicle is on the broken edge, perform a U-turn and reroute from the leg origin.
     wasted_travel_time = 0.0
     wasted_travel_distance = 0.0
-    routing_depot = original_route.depot
     event_start_node: Depot | Customer = current_node
     start_time = current_time
     if on_broken_edge and leg is not None:
@@ -507,14 +506,6 @@ def _handle_disaster(
         wasted_travel_distance = wasted_travel_time * UNIT_SPEED
         start_time = current_time + elapsed
         event_start_node = from_node
-        routing_depot = Depot(
-            index=-(1000 + affected_route),
-            x=from_node.x,
-            y=from_node.y,
-            max_duration=original_route.depot.max_duration,
-            max_capacity=original_route.depot.max_capacity,
-            max_vehicles=1,
-        )
 
     # Build pending customers list from cached ids (deterministic order)
     pending_customers = [
@@ -523,28 +514,28 @@ def _handle_disaster(
         if fixed_next_customer is None or cid != fixed_next_customer.index
     ]
 
-    # Ask the algorithm to reroute locally for the depot
+    # Ask the algorithm to reroute using VRP-OD (origin-destination routing).
+    # The vehicle is at event_start_node and must visit pending_customers, then return to original_route.depot.
     broken_edge = _normalize_edge(node_a, node_b)
-    algorithm._build_matrix([routing_depot], pending_customers)
-    # When we used a virtual routing_depot (u-turn case) the local node ids
-    # in the algorithm's matrix include the virtual depot index instead of
-    # the original from-node index. In that case block the edge using the
-    # virtual depot index so the local router cannot use the broken link.
-    if routing_depot.index < 0:
-        # determine which of node_a/node_b is the from-node for this leg
-        if leg is not None:
-            from_idx, to_idx = leg
-        else:
-            # fallback: assume node_a is the from-node
-            from_idx, to_idx = node_a, node_b
-        other = node_b if node_a == from_idx else node_a
-        algorithm._set_edge_inf(routing_depot.index, other)
-    else:
-        algorithm._set_edge_inf(*broken_edge)
+    
+    # Build distance matrix with real depot + current start node + pending customers.
+    nodes_for_matrix: list[Depot | Customer] = [original_route.depot]
+    if isinstance(event_start_node, Customer):
+        nodes_for_matrix.append(event_start_node)
+    algorithm._build_matrix(nodes_for_matrix, pending_customers)
+    # Block the broken edge in the matrix so the router cannot use it
+    algorithm._set_edge_inf(*broken_edge)
+    
     if pending_customers:
-        reroute_solution = algorithm.reroute_local(routing_depot, pending_customers)
+        print(f"pending_customers for reroute: {[c.index for c in pending_customers]}, fixed_next_customer: {fixed_next_customer.index if fixed_next_customer else None}, start_node: {event_start_node.index}, real_end_depot: {original_route.depot.index}, broken_edge: {broken_edge}")
+        # Call new VRP-OD interface: from current position -> pending customers -> real depot
+        reroute_solution = algorithm.reroute_local(
+            current_start_node=event_start_node,
+            pending_customers=pending_customers,
+            real_end_depot=original_route.depot,
+        )
     else:
-        reroute_solution = Solution(routes=[Route(depot=routing_depot, customers=[])])
+        reroute_solution = Solution(routes=[Route(depot=original_route.depot, customers=[])])
     print(
         f"Reroute local returned {len(reroute_solution.routes)} route(s) for depot {affected_vehicle_state.route.depot.index}"
     )
@@ -555,10 +546,8 @@ def _handle_disaster(
     if len(reroute_solution.routes) > 1:
         print("Reroute local returned multiple routes; using the first one for now.")
 
-    # Restore real depot if we used a virtual one, and prepend fixed next customer if needed.
+    # Restore real depot and prepend fixed next customer if needed.
     new_route = reroute_solution.routes[0]
-    if routing_depot.index < 0:
-        new_route = Route(depot=original_route.depot, customers=new_route.customers)
     if fixed_next_customer is not None:
         new_route = Route(
             depot=new_route.depot,

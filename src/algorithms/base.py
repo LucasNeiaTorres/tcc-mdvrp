@@ -39,14 +39,19 @@ class MDVRPAlgorithm(ABC):
     @abstractmethod
     def reroute_local(
         self,
-        depot: Depot,
-        customers: List[Customer],
+        current_start_node: Customer | Depot,
+        pending_customers: List[Customer],
+        real_end_depot: Depot,
     ) -> Solution:
-        """Recompute routes for a single depot handling only the given customers.
+        """Recompute routes for pending customers in a dynamic reroute scenario.
+
+        Solves a VRP-OD (origin-destination) problem where:
+        - current_start_node: where the vehicle currently is (not the original depot)
+        - pending_customers: customers still to be served
+        - real_end_depot: the original depot where routes must end
 
         This is intended for fast local rerouting after events (failures).
-        Algorithms that perform cluster-first / route-second can implement
-        optimized local reroute logic here. Return a `Solution`.
+        Returns a Solution where routes begin from current_start_node and end at real_end_depot.
         """
         ...
 
