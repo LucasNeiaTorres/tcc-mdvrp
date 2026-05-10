@@ -19,18 +19,31 @@ class Solution:
         """Total travel distance across all routes."""
         return sum(route.total_distance() for route in self.routes)
 
-    def is_feasible(self) -> bool:
-        """True if route constraints and per-depot vehicle limits are satisfied."""
+    def routes_are_feasible(self) -> bool:
+        """True if every route satisfies capacity and duration constraints."""
+        return all(route.is_feasible() for route in self.routes)
+
+    def fleet_is_feasible(self) -> bool:
+        """True if each depot's route count does not exceed its vehicle limit."""
         per_depot_count: Dict[int, int] = {}
         for route in self.routes:
             per_depot_count[route.depot.index] = per_depot_count.get(route.depot.index, 0) + 1
 
-        routes_ok = all(route.is_feasible() for route in self.routes)
-        fleet_ok = all(
+        return all(
             per_depot_count.get(route.depot.index, 0) <= route.depot.max_vehicles
             for route in self.routes
         )
-        return routes_ok and fleet_ok
+
+    def is_feasible(self) -> bool:
+        """True if all routes are individually feasible.
+
+        Fleet limits are checked separately via :meth:`fleet_is_feasible`.
+        """
+        return self.routes_are_feasible()
+
+    def fully_feasible(self) -> bool:
+        """True if route constraints and per-depot vehicle limits are satisfied."""
+        return self.routes_are_feasible() and self.fleet_is_feasible()
 
     @property
     def visualizable_routes(self) -> List[Route]:
@@ -58,3 +71,11 @@ class Solution:
                 ),
             }
         return report
+
+    def feasibility_overview(self) -> Dict[str, bool]:
+        """Return the global feasibility flags for this solution."""
+        return {
+            "routes_ok": self.routes_are_feasible(),
+            "fleet_ok": self.fleet_is_feasible(),
+            "fully_feasible": self.fully_feasible(),
+        }

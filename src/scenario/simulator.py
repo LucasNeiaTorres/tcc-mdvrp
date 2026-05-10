@@ -366,8 +366,10 @@ def run_simulation(
 
     routes_using_broken = sorted(routes_using_broken_set)
 
-    feasible_now = current_solution.is_feasible()
-    feasible_considering_broken = feasible_now and len(routes_using_broken) == 0
+    routes_feasible_now = current_solution.is_feasible()
+    fleet_feasible_now = current_solution.fleet_is_feasible()
+    fully_feasible_now = current_solution.fully_feasible()
+    feasible_considering_broken = routes_feasible_now and len(routes_using_broken) == 0
 
     # Print final summary
     print("--- Simulation summary ---")
@@ -380,7 +382,9 @@ def run_simulation(
         print(f"Unserved customers      : {unserved_customers}")
     else:
         print("Unserved customers      : none")
-    print(f"Feasible (routes)       : {feasible_now}")
+    print(f"Feasible (routes)       : {routes_feasible_now}")
+    print(f"Feasible (fleet)        : {fleet_feasible_now}")
+    print(f"Feasible (full)         : {fully_feasible_now}")
     print(f"Feasible (w/ broken)    : {feasible_considering_broken}")
     if routes_using_broken:
         print(f"Routes using broken edges: {routes_using_broken}")
@@ -399,7 +403,9 @@ def run_simulation(
             "total_cost_impact": total_cost_impact,
             "reroute_count": reroute_count,
             "unserved_customers": unserved_customers,
-            "feasible": feasible_now,
+            "feasible": routes_feasible_now,
+            "fleet_feasible": fleet_feasible_now,
+            "fully_feasible": fully_feasible_now,
             "feasible_considering_broken": feasible_considering_broken,
             "routes_using_broken": routes_using_broken,
         }
