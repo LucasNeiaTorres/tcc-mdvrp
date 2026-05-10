@@ -1,7 +1,6 @@
 import argparse
 from pathlib import Path
 
-from algorithms.greedy import GreedyAlgorithm
 from algorithms.ccbc_pso import CCBCPSOAlgorithm
 from utils.config import load_config
 from utils.converter import build_customers, build_depots, load_instance
@@ -23,6 +22,12 @@ def main() -> int:
         default=default_failures_file,
         metavar="PATH",
         help="Path to the failures JSON file (default: auto-detected for the selected instance).",
+    )
+    parser.add_argument(
+        "--no-simulate",
+        action="store_true",
+        default=False,
+        help="Skip the simulation phase (default: run simulation if a failures file is found).",
     )
     args = parser.parse_args()
 
@@ -48,21 +53,16 @@ def main() -> int:
     else:
         default_failure_candidates = sorted(failures_dir.glob(f"{args.instance}_*.json"))
         if not default_failure_candidates:
-            raise FileNotFoundError(
-                f"No failures file found for instance {args.instance} in {failures_dir}"
-            )
-        failures_file = default_failure_candidates[-1]
+            failures_file = None
+        else:
+            failures_file = default_failure_candidates[-1]
 
     # Load raw instance and reference solution
     instance = read_cordeau_data_file(str(data_file))
     reference_solution = read_cordeau_solution_file(str(solution_file), instance)
-    failures = read_failures_file(str(failures_file))
+    failures = read_failures_file(str(failures_file)) if failures_file is not None else None
 
     cfg = load_config()
-
-    # Run greedy algorithm
-    # greedy = GreedyAlgorithm()
-    # greedy_solution = greedy.solve(customers, depots)
 
     # Run CCBC+PSO algorithm
     algorithm = CCBCPSOAlgorithm(cfg)
@@ -86,7 +86,6 @@ def main() -> int:
     )
 
     print(f"Reference   : {reference_solution.objective:.2f}")
-    # print(f"{greedy}  cost: {greedy_solution.total_cost():.2f}  feasible: {greedy_solution.is_feasible()}")
     print(f"{algorithm}")
     print(
         f"  cost: {solution.total_cost():.2f} "
@@ -100,59 +99,61 @@ def main() -> int:
     visualize_instance(instance)
     visualize_comparison(
         instance,
-        # [reference_solution, greedy_solution, ga_pso_solution],
         [reference_solution, solution],
         titles=[
             f"Reference (obj: {reference_solution.objective:.2f})",
-            # f"Greedy (cost: {greedy_solution.total_cost():.2f})",
             f"GA+PSO (cost: {solution.total_cost():.2f})",
         ],
     )
     
-    simulated_solution, history_log = run_simulation(
-        # instance=instance,
-        initial_solution=solution,
-        failures=failures,
-        instance_name=data_file.name,
-        algorithm=algorithm
-        # output_dir=base_dir / "data" / "processed" / "simulations" / data_file.name,
-    )
-
-    visualize_comparison(
-        instance,
-        # [reference_solution, greedy_solution, ga_pso_solution],
-        [reference_solution, simulated_solution],
-        titles=[
-            f"Reference (obj: {reference_solution.objective:.2f})",
-            # f"Greedy (cost: {greedy_solution.total_cost():.2f})",
-            f"GA+PSO after simulation (cost: {simulated_solution.total_cost():.2f})",
-        ],
-    )
-    
-    log_path = SIMULATION_LOG_DIR / f"{data_file.name}_log.json"
-    validation_result = validate_simulation_log(log_path)
-    blocked_edge_violations = validation_result["blocked_edge_violations"]
-    unserved_customers = validation_result["unserved_customers"]
-
-    if blocked_edge_violations:
-        route_id, node_a, node_b, depart_time, arrival_time, block_time = blocked_edge_violations[0]
-        print(
-            f"Validation failed: {len(blocked_edge_violations)} blocked-edge violation(s) found in {log_path}\n"
-            f"  first violation: route {route_id} used edge {node_a} <-> {node_b} "
-            f"between t={depart_time:.3f}min and t={arrival_time:.3f}min, "
-            f"but it was blocked at t={block_time:.3f}min"
-        )
-    if unserved_customers:
-        print(
-            f"Validation failed: {len(unserved_customers)} unserved customer(s) found in {log_path}\n"
-            f"  unserved customers: {unserved_customers}"
+    if failures is not None and not args.no_simulate:
+        simulated_solution, history_log = run_simulation(
+            # instance=instance,
+            initial_solution=solution,
+            failures=failures,
+            instance_name=data_file.name,
+            algorithm=algorithm
+            # output_dir=base_dir / "data" / "processed" / "simulations" / data_file.name,
         )
 
-    if blocked_edge_violations or unserved_customers:
-        return 1
+        visualize_comparison(
+            instance,
+            [reference_solution, simulated_solution],
+            titles=[
+                f"Reference (obj: {reference_solution.objective:.2f})",
+                f"GA+PSO after simulation (cost: {simulated_solution.total_cost():.2f})",
+            ],
+        )
 
-    print(f"Validation passed: no blocked-edge violations found in {log_path}")
-    print(f"Validation passed: all customers were served in {log_path}")
+        log_path = SIMULATION_LOG_DIR / f"{data_file.name}_log.json"
+        validation_result = validate_simulation_log(log_path)
+        blocked_edge_violations = validation_result["blocked_edge_violations"]
+        unserved_customers = validation_result["unserved_customers"]
+
+        if blocked_edge_violations:
+            route_id, node_a, node_b, depart_time, arrival_time, block_time = blocked_edge_violations[0]
+            print(
+                f"Validation failed: {len(blocked_edge_violations)} blocked-edge violation(s) found in {log_path}\n"
+                f"  first violation: route {route_id} used edge {node_a} <-> {node_b} "
+                f"between t={depart_time:.3f}min and t={arrival_time:.3f}min, "
+                f"but it was blocked at t={block_time:.3f}min"
+            )
+        if unserved_customers:
+            print(
+                f"Validation failed: {len(unserved_customers)} unserved customer(s) found in {log_path}\n"
+                f"  unserved customers: {unserved_customers}"
+            )
+
+        if blocked_edge_violations or unserved_customers:
+            return 1
+
+        print(f"Validation passed: no blocked-edge violations found in {log_path}")
+        print(f"Validation passed: all customers were served in {log_path}")
+    else:
+        if args.no_simulate:
+            print("Simulation skipped (--no-simulate).")
+        else:
+            print("No failures file found; skipping simulation.")
     
 
 
