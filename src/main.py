@@ -88,7 +88,11 @@ def main() -> int:
     print(f"Reference   : {reference_solution.objective:.2f}")
     # print(f"{greedy}  cost: {greedy_solution.total_cost():.2f}  feasible: {greedy_solution.is_feasible()}")
     print(f"{algorithm}")
-    print(f"  cost: {solution.total_cost():.2f}  feasible: {solution.is_feasible()}")
+    print(
+        f"  cost: {solution.total_cost():.2f} "
+        f"feasible: {solution.fully_feasible()} "
+        f"(routes: {solution.is_feasible()}, fleet: {solution.fleet_is_feasible()})"
+    )
     print(f"Saved clusters : {clustering_file}")
     print(f"Saved routes   : {routing_file}")
 

@@ -11,6 +11,14 @@ from core.entities import Route
 from core.solution import Solution
 
 
+def _solution_feasibility(solution: Solution) -> dict[str, bool]:
+    return {
+        "routes_feasible": solution.is_feasible(),
+        "fleet_feasible": solution.fleet_is_feasible(),
+        "feasible": solution.fully_feasible(),
+    }
+
+
 def _build_metadata(instance_name: str, algorithm_name: str) -> dict:
     return {
         "instance": instance_name,
@@ -84,7 +92,7 @@ def save_routing_result(
         "summary": {
             "route_count": len(solution.routes),
             "total_cost": solution.total_cost(),
-            "feasible": solution.is_feasible(),
+            **_solution_feasibility(solution),
         },
         "routes": routes_payload,
     }
@@ -132,7 +140,7 @@ def save_reroute_result(
             "planned_total_cost": solution.total_cost(),
             "realized_total_cost": realized_total_cost,
             "wasted_travel_distance": wasted_total_distance,
-            "feasible": solution.is_feasible(),
+            **_solution_feasibility(solution),
             "affected_vehicle_count": len(vehicles),
         },
         "routes": [
@@ -166,7 +174,7 @@ def save_clustering_and_routing(
             "cluster_count": len(clusters),
             "route_count": len(solution.routes),
             "total_cost": solution.total_cost(),
-            "feasible": solution.is_feasible(),
+            **_solution_feasibility(solution),
         },
         "clusters": [
             {
