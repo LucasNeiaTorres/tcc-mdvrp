@@ -318,19 +318,53 @@ def run_simulation(
     expected_set = set(expected_customer_indices)
     unserved_customers = sorted(list(expected_set - visited))
 
-    # Collect broken edges from history_log and check if any current route still uses them
-    broken_edges: set[tuple[int, int]] = set()
-    for _, etype, payload in history_log:
+    # Check broken edges temporally: a route only violates a block if it
+    # traverses the edge after the block time, not merely because the final
+    # route representation still contains that edge somewhere in its plan.
+    blocked_edges: dict[tuple[int, int], float] = {}
+    route_stop_events: dict[int, list[tuple[float, int, float | None]]] = {}
+    for event_time, etype, payload in history_log:
         if etype == "edge_block":
-            broken_edges.add(_normalize_edge(payload["node_a"], payload["node_b"]))
+            edge = _normalize_edge(payload["node_a"], payload["node_b"])
+            blocked_edges[edge] = min(blocked_edges.get(edge, float("inf")), float(event_time))
+            continue
+        if etype == "arrival":
+            route_id = payload.get("route_id")
+            node_index = payload.get("node_index")
+            stop_index = payload.get("stop_index")
+            if route_id is None or node_index is None or stop_index is None:
+                continue
+            route_stop_events.setdefault(int(route_id), []).append((float(event_time), int(node_index), None))
+            continue
+        if etype == "service_end":
+            route_id = payload.get("route_id")
+            node_index = payload.get("node_index")
+            stop_index = payload.get("stop_index")
+            if route_id is None or node_index is None or stop_index is None:
+                continue
+            stops = route_stop_events.get(int(route_id), [])
+            for idx in range(len(stops) - 1, -1, -1):
+                arrival_time, existing_node_index, service_end_time = stops[idx]
+                if existing_node_index == int(node_index) and service_end_time is None:
+                    stops[idx] = (arrival_time, existing_node_index, float(event_time))
+                    break
 
-    routes_using_broken: list[int] = []
-    for i, route in enumerate(current_solution.routes, start=1):
-        nodes = [route.depot.index] + [c.index for c in route.customers] + [route.depot.index]
-        for a, b in zip(nodes, nodes[1:]):
-            if _normalize_edge(a, b) in broken_edges:
-                routes_using_broken.append(i)
+    routes_using_broken_set: set[int] = set()
+    for route_id, stops in route_stop_events.items():
+        if len(stops) < 2:
+            continue
+        prev_arrival_time, prev_node, prev_service_end_time = stops[0]
+        depart_time = prev_service_end_time if prev_service_end_time is not None else prev_arrival_time
+        for arrival_time, node, service_end_time in stops[1:]:
+            edge = _normalize_edge(prev_node, node)
+            block_time = blocked_edges.get(edge)
+            if block_time is not None and block_time < depart_time:
+                routes_using_broken_set.add(route_id)
                 break
+            depart_time = service_end_time if service_end_time is not None else arrival_time
+            prev_node = node
+
+    routes_using_broken = sorted(routes_using_broken_set)
 
     feasible_now = current_solution.is_feasible()
     feasible_considering_broken = feasible_now and len(routes_using_broken) == 0

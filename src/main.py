@@ -36,7 +36,15 @@ def main() -> int:
     solution_file = base_dir / "data" / "raw" / "cordeau_sol" / f"{args.instance}.res"
     failures_dir = base_dir / "data" / "processed" / "failures"
     if args.failures_file is not None:
-        failures_file = failures_dir / args.failures_file
+        provided_failures = Path(args.failures_file)
+        if provided_failures.is_absolute():
+            failures_file = provided_failures
+        elif provided_failures.exists():
+            failures_file = provided_failures
+        elif (base_dir / provided_failures).exists():
+            failures_file = base_dir / provided_failures
+        else:
+            failures_file = failures_dir / provided_failures.name
     else:
         default_failure_candidates = sorted(failures_dir.glob(f"{args.instance}_*.json"))
         if not default_failure_candidates:
