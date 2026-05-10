@@ -551,11 +551,19 @@ def _handle_disaster(
     # Ask the algorithm to reroute using VRP-OD (origin-destination routing).
     # The vehicle is at event_start_node and must visit pending_customers, then return to original_route.depot.
     broken_edge = _normalize_edge(node_a, node_b)
+
+    reroute_start_node: Depot | Customer = (
+        fixed_next_customer if fixed_next_customer is not None else event_start_node
+    )
     
     # Build distance matrix with real depot + current start node + pending customers.
     nodes_for_matrix: list[Depot | Customer] = [original_route.depot]
-    if isinstance(event_start_node, Customer):
-        nodes_for_matrix.append(event_start_node)
+    if isinstance(reroute_start_node, Customer):
+        nodes_for_matrix.append(reroute_start_node)
+    if fixed_next_customer is not None and fixed_next_customer.index not in {
+        node.index for node in nodes_for_matrix
+    }:
+        nodes_for_matrix.append(fixed_next_customer)
     algorithm._build_matrix(nodes_for_matrix, pending_customers)
     # Block the broken edge in the matrix so the router cannot use it
     algorithm._set_edge_inf(*broken_edge)
@@ -564,7 +572,7 @@ def _handle_disaster(
         print(f"pending_customers for reroute: {[c.index for c in pending_customers]}, fixed_next_customer: {fixed_next_customer.index if fixed_next_customer else None}, start_node: {event_start_node.index}, real_end_depot: {original_route.depot.index}, broken_edge: {broken_edge}")
         # Call new VRP-OD interface: from current position -> pending customers -> real depot
         reroute_solution = algorithm.reroute_local(
-            current_start_node=event_start_node,
+            current_start_node=reroute_start_node,
             pending_customers=pending_customers,
             real_end_depot=original_route.depot,
         )
