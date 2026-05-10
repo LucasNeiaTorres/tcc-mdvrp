@@ -34,10 +34,10 @@ def main() -> int:
     """Load the selected instance, run the algorithm and visualize the result."""
     data_file = base_dir / "data" / "raw" / "cordeau" / args.instance
     solution_file = base_dir / "data" / "raw" / "cordeau_sol" / f"{args.instance}.res"
+    failures_dir = base_dir / "data" / "processed" / "failures"
     if args.failures_file is not None:
-        failures_file = Path(args.failures_file)
+        failures_file = failures_dir / args.failures_file
     else:
-        failures_dir = base_dir / "data" / "processed" / "failures"
         default_failure_candidates = sorted(failures_dir.glob(f"{args.instance}_*.json"))
         if not default_failure_candidates:
             raise FileNotFoundError(
