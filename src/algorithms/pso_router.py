@@ -145,7 +145,8 @@ class RoutingProblem(ElementwiseProblem):
                 total += self.dist_fn(seg[i].index, seg[i + 1].index)
             total += self.dist_fn(seg[-1].index, self.end_depot.index)
 
-        out["F"] = total
+        excess = max(0, len(segments) - self.depot.max_vehicles)
+        out["F"] = total + excess * total
 
 
 class DynamicRoutingProblem(ElementwiseProblem):
