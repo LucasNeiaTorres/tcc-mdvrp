@@ -4,7 +4,7 @@ ccbc:
   n_starts: 5
 
 ga:
-  pop_size: 50
-  n_gen: 200
+  pop_size: 30       # Prins (2004): σ=30 optimal; larger hurts due to unproductive crossovers
+  n_gen: 200        # ~30,000 crossovers / σ=30 per Prins (2004) Christofides setting
   seed: 42
-  mutation_prob: 0.1
+  mutation_prob: 0.15 # Prins (2004): pm up to 0.20; higher rate is fine with LS mutation
