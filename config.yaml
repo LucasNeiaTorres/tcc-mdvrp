@@ -3,11 +3,8 @@ ccbc:
   tol: 1.0e-4
   n_starts: 5
 
-pso:
+ga:
   pop_size: 50
   n_gen: 200
-  inertia: 0.9
-  c1: 2.0
-  c2: 2.0
-  adaptive: true
   seed: 42
+  mutation_prob: 0.1

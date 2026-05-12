@@ -7,11 +7,11 @@ import pytest
 
 from core.entities import Customer, Depot, Route
 from core.solution import Solution
-from utils.config import CCBCConfig, PSOConfig, AppConfig
+from utils.config import CCBCConfig, GAConfig, AppConfig
 
 from algorithms.ccbc_cluster import run_ccbc_clustering
-from algorithms.pso_router import RoutingProblem, run_pso_routing
-from algorithms.ccbc_pso import CCBCPSOAlgorithm
+from algorithms.ga_router import RoutingProblem, run_ga_routing, local_search, _route_cost
+from algorithms.ccbc_ga import CCBCGAAlgorithm
 
 
 # ---------------------------------------------------------------------------
@@ -57,16 +57,13 @@ def ccbc_cfg() -> CCBCConfig:
 
 
 @pytest.fixture
-def pso_cfg() -> PSOConfig:
-    return PSOConfig(
-        pop_size=10, n_gen=30, inertia=0.9, c1=2.0, c2=2.0,
-        adaptive=True, seed=0,
-    )
+def ga_cfg() -> GAConfig:
+    return GAConfig(pop_size=10, n_gen=30, seed=0, mutation_prob=0.5)
 
 
 @pytest.fixture
-def app_cfg(ccbc_cfg, pso_cfg) -> AppConfig:
-    return AppConfig(ccbc=ccbc_cfg, pso=pso_cfg)
+def app_cfg(ccbc_cfg, ga_cfg) -> AppConfig:
+    return AppConfig(ccbc=ccbc_cfg, ga=ga_cfg)
 
 
 # ---------------------------------------------------------------------------
@@ -164,16 +161,83 @@ class TestRoutingProblem:
 
 
 # ---------------------------------------------------------------------------
+# local_search
+# ---------------------------------------------------------------------------
+
+class TestLocalSearch:
+    @pytest.fixture
+    def ls_depot(self):
+        return Depot(index=0, x=0.0, y=0.0, max_duration=0.0, max_capacity=100)
+
+    @pytest.fixture
+    def ls_nodes(self, ls_depot):
+        """Customers on a grid; depot at origin."""
+        cs = [
+            Customer(index=1, x=1.0, y=0.0, demand=5, service_time=0),
+            Customer(index=2, x=2.0, y=0.0, demand=5, service_time=0),
+            Customer(index=3, x=3.0, y=0.0, demand=5, service_time=0),
+            Customer(index=4, x=4.0, y=0.0, demand=5, service_time=0),
+        ]
+        nodes = {ls_depot.index: (ls_depot.x, ls_depot.y)}
+        nodes.update({c.index: (c.x, c.y) for c in cs})
+        dfn = lambda a, b: _dist(a, b, nodes)
+        return cs, dfn
+
+    def test_cost_non_increasing(self, ls_depot, ls_nodes):
+        """Local search must never worsen the total solution cost."""
+        customers, dfn = ls_nodes
+        # Deliberately bad initial split: two separate single-customer routes + one pair
+        routes = [[customers[3], customers[0]], [customers[2], customers[1]]]
+        before = sum(_route_cost(r, ls_depot, dfn) for r in routes)
+        improved = local_search(routes, ls_depot, dfn)
+        after = sum(_route_cost(r, ls_depot, dfn) for r in improved)
+        assert after <= before + 1e-9
+
+    def test_all_customers_preserved(self, ls_depot, ls_nodes):
+        """No customers should be lost or duplicated after local search."""
+        customers, dfn = ls_nodes
+        routes = [[customers[0], customers[3]], [customers[1], customers[2]]]
+        improved = local_search(routes, ls_depot, dfn)
+        result_indices = [c.index for r in improved for c in r]
+        expected_indices = sorted(c.index for c in customers)
+        assert sorted(result_indices) == expected_indices
+
+    def test_capacity_feasible_after_ls(self, ls_nodes):
+        """All routes returned must satisfy capacity constraints."""
+        customers, dfn = ls_nodes
+        tight_depot = Depot(index=0, x=0.0, y=0.0, max_duration=0.0, max_capacity=10)
+        routes = [[customers[0], customers[1]], [customers[2], customers[3]]]
+        improved = local_search(routes, tight_depot, dfn)
+        for r in improved:
+            assert sum(c.demand for c in r) <= tight_depot.max_capacity
+
+    def test_empty_routes_removed(self, ls_depot, ls_nodes):
+        """Local search must strip empty routes from its output."""
+        customers, dfn = ls_nodes
+        routes = [[customers[0]], [customers[1]], [customers[2]], [customers[3]]]
+        improved = local_search(routes, ls_depot, dfn)
+        assert all(len(r) > 0 for r in improved)
+
+    def test_single_route_stays_valid(self, ls_depot, ls_nodes):
+        """A single feasible route should remain valid after LS."""
+        customers, dfn = ls_nodes
+        routes = [list(customers)]
+        improved = local_search(routes, ls_depot, dfn)
+        result_indices = sorted(c.index for r in improved for c in r)
+        assert result_indices == sorted(c.index for c in customers)
+
+
+# ---------------------------------------------------------------------------
 # run_pso_routing edge cases
 # ---------------------------------------------------------------------------
 
-class TestRunPSORouting:
-    def test_empty_cluster(self, depots, pso_cfg, dist_fn):
-        routes = run_pso_routing(depots[0], [], dist_fn, pso_cfg)
+class TestRunGARouting:
+    def test_empty_cluster(self, depots, ga_cfg, dist_fn):
+        routes = run_ga_routing(depots[0], [], dist_fn, ga_cfg)
         assert routes == []
 
-    def test_single_customer(self, depots, customers, pso_cfg, dist_fn):
-        routes = run_pso_routing(depots[0], [customers[0]], dist_fn, pso_cfg)
+    def test_single_customer(self, depots, customers, ga_cfg, dist_fn):
+        routes = run_ga_routing(depots[0], [customers[0]], dist_fn, ga_cfg)
         assert len(routes) == 1
         assert routes[0].customers[0].index == customers[0].index
 
@@ -185,19 +249,19 @@ class TestRunPSORouting:
 
 class TestCCBCPSOAlgorithm:
     def test_solve_returns_solution(self, depots, customers, app_cfg):
-        algo = CCBCPSOAlgorithm(app_cfg)
+        algo = CCBCGAAlgorithm(app_cfg)
         solution = algo.solve(customers, depots)
         assert isinstance(solution, Solution)
 
     def test_all_customers_assigned(self, depots, customers, app_cfg):
-        algo = CCBCPSOAlgorithm(app_cfg)
+        algo = CCBCGAAlgorithm(app_cfg)
         solution = algo.solve(customers, depots)
         assigned = {c.index for route in solution.routes for c in route.customers}
         expected = {c.index for c in customers}
         assert assigned == expected
 
     def test_cost_is_positive(self, depots, customers, app_cfg):
-        algo = CCBCPSOAlgorithm(app_cfg)
+        algo = CCBCGAAlgorithm(app_cfg)
         solution = algo.solve(customers, depots)
         assert solution.total_cost() > 0
 
@@ -217,7 +281,7 @@ class TestCCBCPSOAlgorithm:
             Customer(index=104, x=4.0, y=0.0, demand=10, service_time=0),
         ]
 
-        algo = CCBCPSOAlgorithm(app_cfg)
+        algo = CCBCGAAlgorithm(app_cfg)
         solution = algo.solve(customers, [depot])
 
         assert len(solution.routes) == 2
@@ -235,5 +299,6 @@ class TestLoadConfig:
         assert isinstance(app_cfg.ccbc.max_iter, int)
         assert isinstance(app_cfg.ccbc.tol, float)
         assert isinstance(app_cfg.ccbc.n_starts, int)
-        assert isinstance(app_cfg.pso.adaptive, bool)
-        assert isinstance(app_cfg.pso.c1, float)
+        assert isinstance(app_cfg.ga.pop_size, int)
+        assert isinstance(app_cfg.ga.n_gen, int)
+        assert isinstance(app_cfg.ga.mutation_prob, float)

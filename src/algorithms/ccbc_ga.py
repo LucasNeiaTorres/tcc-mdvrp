@@ -1,5 +1,5 @@
 """
-CCBC+PSO Cluster-first, Route-second algorithm for MDVRP.
+CCBC+GA Cluster-first, Route-second algorithm for MDVRP.
 
 Phase 1 — Clustering (CCBC):
     Each customer is assigned to a depot via Constrained Centroid-Based
@@ -7,15 +7,15 @@ Phase 1 — Clustering (CCBC):
     slots, multi-start Voronoi initialisation, and two-phase boundary
     resolution.
 
-Phase 2 — Routing (PSO + Bellman split):
-    Within each depot's cluster a PSO optimises the giant-tour order via SPV
+Phase 2 — Routing (GA + Bellman split):
+    Within each depot's cluster a GA optimises the giant-tour order via SPV
     encoding.  For each candidate permutation the Bellman split finds the
     optimal vehicle partition given the depot's capacity.
 
 Usage
 -----
     cfg = load_config()
-    algorithm = CCBCPSOAlgorithm(cfg)
+    algorithm = CCBCGAAlgorithm(cfg)
     solution = algorithm.solve(customers, depots)
 """
 
@@ -23,15 +23,15 @@ from typing import Dict, List
 
 from algorithms.base import ClusterFirstAlgorithm
 from algorithms.ccbc_cluster import run_ccbc_clustering
-from algorithms.pso_router import run_pso_routing, run_pso_reroute
+from algorithms.ga_router import run_ga_routing, run_ga_reroute
 from core.entities import Customer, Depot
 from core.solution import Solution
 from utils.config import AppConfig, load_config
 
 
-class CCBCPSOAlgorithm(ClusterFirstAlgorithm):
+class CCBCGAAlgorithm(ClusterFirstAlgorithm):
     """
-    Cluster-first, route-second MDVRP solver using CCBC and PSO.
+    Cluster-first, route-second MDVRP solver using CCBC and GA.
 
     The distance matrix is built once by ``ClusterFirstAlgorithm.solve()``
     before either phase runs, so ``route()`` can use ``self._dist()`` for
@@ -68,24 +68,24 @@ class CCBCPSOAlgorithm(ClusterFirstAlgorithm):
         return clusters
 
     def route(self, clusters: Dict[Depot, List[Customer]]) -> Solution:
-        """Phase 2: optimise visiting order and vehicle split per depot via PSO."""
+        """Phase 2: optimise visiting order and vehicle split per depot via GA."""
         routes = []
         for depot, depot_customers in clusters.items():
             routes.extend(
-                run_pso_routing(
+                run_ga_routing(
                     depot=depot,
                     customers=depot_customers,
                     dist_fn=self._dist,
-                    cfg=self.cfg.pso,
+                    cfg=self.cfg.ga,
                 )
             )
         return Solution(routes=routes)
 
     def __repr__(self) -> str:
         return (
-            f"CCBCPSOAlgorithm("
+            f"CCBCGAAlgorithm("
             f"ccbc_iter={self.cfg.ccbc.max_iter}, ccbc_starts={self.cfg.ccbc.n_starts}, "
-            f"pso_pop={self.cfg.pso.pop_size}, pso_gen={self.cfg.pso.n_gen})"
+            f"ga_pop={self.cfg.ga.pop_size}, ga_gen={self.cfg.ga.n_gen})"
         )
 
     def reroute_local(
@@ -96,14 +96,14 @@ class CCBCPSOAlgorithm(ClusterFirstAlgorithm):
     ) -> Solution:
         """Reroute for dynamic scenario (VRP-OD): from current_start_node to real_end_depot.
 
-        Uses PSO to optimize the order of pending_customers starting from the
+        Uses GA to optimize the order of pending_customers starting from the
         vehicle's current position (not the original depot) and terminating at
         the real depot. This is mathematically correct for dynamic rerouting.
         """
-        return Solution(routes=run_pso_reroute(
+        return Solution(routes=run_ga_reroute(
             current_start_node=current_start_node,
             pending_customers=pending_customers,
             real_end_depot=real_end_depot,
             dist_fn=self._dist,
-            cfg=self.cfg.pso,
+            cfg=self.cfg.ga,
         ))

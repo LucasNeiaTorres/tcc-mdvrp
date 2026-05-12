@@ -20,20 +20,17 @@ class CCBCConfig:
 
 
 @dataclass
-class PSOConfig:
+class GAConfig:
     pop_size: int
     n_gen: int
-    inertia: float
-    c1: float
-    c2: float
-    adaptive: bool
     seed: int
+    mutation_prob: float
 
 
 @dataclass
 class AppConfig:
     ccbc: CCBCConfig
-    pso: PSOConfig
+    ga: GAConfig
 
 
 def load_config(path: Optional[str] = None) -> AppConfig:
@@ -45,7 +42,7 @@ def load_config(path: Optional[str] = None) -> AppConfig:
               project root (two levels above this file).
 
     Returns:
-        AppConfig with fully typed ga and pso sub-configs.
+        AppConfig with fully typed ccbc and ga sub-configs.
     """
     if path is None:
         path = str(Path(__file__).parent.parent.parent / "config.yaml")
@@ -54,7 +51,7 @@ def load_config(path: Optional[str] = None) -> AppConfig:
         raw = yaml.safe_load(f)
 
     ccbc_raw = raw["ccbc"]
-    pso_raw = raw["pso"]
+    ga_raw = raw["ga"]
 
     return AppConfig(
         ccbc=CCBCConfig(
@@ -62,13 +59,10 @@ def load_config(path: Optional[str] = None) -> AppConfig:
             tol=float(ccbc_raw["tol"]),
             n_starts=int(ccbc_raw["n_starts"]),
         ),
-        pso=PSOConfig(
-            pop_size=int(pso_raw["pop_size"]),
-            n_gen=int(pso_raw["n_gen"]),
-            inertia=float(pso_raw["inertia"]),
-            c1=float(pso_raw["c1"]),
-            c2=float(pso_raw["c2"]),
-            adaptive=bool(pso_raw["adaptive"]),
-            seed=int(pso_raw["seed"]),
+        ga=GAConfig(
+            pop_size=int(ga_raw["pop_size"]),
+            n_gen=int(ga_raw["n_gen"]),
+            seed=int(ga_raw["seed"]),
+            mutation_prob=float(ga_raw["mutation_prob"]),
         ),
     )

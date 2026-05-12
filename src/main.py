@@ -1,7 +1,7 @@
 import argparse
 from pathlib import Path
 
-from algorithms.ccbc_pso import CCBCPSOAlgorithm
+from algorithms.ccbc_ga import CCBCGAAlgorithm
 from utils.config import load_config
 from utils.converter import build_customers, build_depots, load_instance
 from utils.data_loader import read_cordeau_data_file, read_cordeau_solution_file, read_failures_file
@@ -65,7 +65,7 @@ def main() -> int:
     cfg = load_config()
 
     # Run CCBC+PSO algorithm
-    algorithm = CCBCPSOAlgorithm(cfg)
+    algorithm = CCBCGAAlgorithm(cfg)
     solution = algorithm.solve(customers, depots)
 
     results_dir = base_dir / "data" / "processed" / "results"
@@ -96,7 +96,7 @@ def main() -> int:
     print(f"Saved routes   : {routing_file}")
 
     # Visualize
-    visualize_instance(instance)
+    # visualize_instance(instance)
     visualize_comparison(
         instance,
         [reference_solution, solution],

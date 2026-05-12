@@ -24,7 +24,7 @@ import argparse
 import time
 from pathlib import Path
 
-from algorithms.ccbc_pso import CCBCPSOAlgorithm
+from algorithms.ccbc_ga import CCBCGAAlgorithm
 from utils.config import load_config
 from utils.converter import load_instance
 
@@ -58,7 +58,7 @@ def _row(name: str, ref: float | None, cost: float, feasible: bool, elapsed: flo
 
 def run_benchmark(instance_names: list[str]) -> None:
     cfg = load_config()
-    algorithm = CCBCPSOAlgorithm(cfg)
+    algorithm = CCBCGAAlgorithm(cfg)
 
     print(f"\nAlgorithm : {algorithm}")
     print(f"Instances : {len(instance_names)}\n")
