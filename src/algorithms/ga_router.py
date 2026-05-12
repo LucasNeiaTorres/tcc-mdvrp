@@ -5,11 +5,11 @@ Solves the route-optimisation sub-problem: given a depot and a fixed set of
 customers already assigned to it, find both the visiting order and the vehicle
 partition that minimise total travel distance.
 
-SPV encoding (Smallest Position Value)
----------------------------------------
-A permutation is obtained by ranking (argsort) the real-valued position vector:
+Permutation encoding
+---------------------
+Each chromosome is an integer permutation of customer indices:
 
-    x = [0.72, 0.11, 0.55]  →  argsort → [1, 2, 0]  →  visit C2, C3, C1
+    x = [1, 2, 0]  →  visit customers[1], customers[2], customers[0]
 
 Bellman split
 -------------
@@ -29,6 +29,8 @@ from typing import Callable, List
 
 import numpy as np
 from pymoo.algorithms.soo.nonconvex.ga import GA
+from pymoo.operators.crossover.ox import OrderCrossover
+from pymoo.operators.sampling.rnd import PermutationRandomSampling
 from pymoo.core.mutation import Mutation
 from pymoo.core.problem import ElementwiseProblem
 from pymoo.optimize import minimize
@@ -98,7 +100,7 @@ def bellman_split(
 
 class RoutingProblem(ElementwiseProblem):
     """
-    SPV-encoded route optimisation problem for pymoo GA.
+    Permutation-encoded route optimisation problem for pymoo GA.
     Solves standard VRP: depot -> customers -> depot.
 
     Parameters
@@ -121,8 +123,9 @@ class RoutingProblem(ElementwiseProblem):
         super().__init__(
             n_var=len(customers),
             n_obj=1,
-            xl=0.0,
-            xu=1.0,
+            xl=0,
+            xu=len(customers) - 1,
+            vtype=int,
         )
         self.depot = depot
         self.customers = customers
@@ -131,8 +134,7 @@ class RoutingProblem(ElementwiseProblem):
         self.end_depot = depot
 
     def _evaluate(self, x: np.ndarray, out: dict, *args, **kwargs) -> None:
-        perm = np.argsort(x)
-        ordered = [self.customers[i] for i in perm]
+        ordered = [self.customers[i] for i in x]
         segments = bellman_split(ordered, self.end_depot, self.dist_fn)
 
         total = 0.0
@@ -173,8 +175,9 @@ class DynamicRoutingProblem(ElementwiseProblem):
         super().__init__(
             n_var=len(pending_customers),
             n_obj=1,
-            xl=0.0,
-            xu=1.0,
+            xl=0,
+            xu=len(pending_customers) - 1,
+            vtype=int,
         )
         self.current_start_node = current_start_node
         self.pending_customers = pending_customers
@@ -189,8 +192,7 @@ class DynamicRoutingProblem(ElementwiseProblem):
             out["F"] = total
             return
 
-        perm = np.argsort(x)
-        ordered = [self.pending_customers[i] for i in perm]
+        ordered = [self.pending_customers[i] for i in x]
 
         total = 0.0
         # 1. From current location to first customer
@@ -725,22 +727,17 @@ class LSMutation(Mutation):
             if rng.random() >= self.prob.value:
                 continue
 
-            perm = np.argsort(X[k])
-            ordered = [self.customers[i] for i in perm]
+            ordered = [self.customers[i] for i in X[k]]
             segments = bellman_split(ordered, self.depot, self.dist_fn)
             improved_segs = local_search(segments, self.depot, self.dist_fn)
 
-            # Re-encode: flatten improved segments → new customer order
+            # Re-encode: flatten improved segments → integer permutation
             new_order = [c for route in improved_segs for c in route]
             if len(new_order) != n:
                 # Fallback: keep original if LS dropped customers (shouldn't happen)
                 continue
 
-            # Build new SPV vector: position i in new_order → SPV rank i/n
-            x_new = np.empty(n)
-            for rank, customer in enumerate(new_order):
-                x_new[self._customer_pos[customer]] = rank / n
-            X[k] = x_new
+            X[k] = np.array([self._customer_pos[c] for c in new_order], dtype=int)
 
         return X
 
@@ -780,6 +777,8 @@ def run_ga_routing(
 
     algorithm = GA(
         pop_size=cfg.pop_size,
+        sampling=PermutationRandomSampling(),
+        crossover=OrderCrossover(),
         mutation=LSMutation(
             depot=depot,
             customers=customers,
@@ -797,8 +796,7 @@ def run_ga_routing(
         verbose=False,
     )
 
-    perm = np.argsort(result.X)
-    ordered_customers = [customers[i] for i in perm]
+    ordered_customers = [customers[i] for i in result.X.astype(int)]
     segments = bellman_split(ordered_customers, depot, dist_fn)
     return [Route(depot=depot, customers=seg) for seg in segments]
 
@@ -848,6 +846,7 @@ def run_ga_reroute(
 
     algorithm = GA(
         pop_size=cfg.pop_size,
+        sampling=PermutationRandomSampling(),
         eliminate_duplicates=True,
     )
 
@@ -859,6 +858,5 @@ def run_ga_reroute(
         verbose=False,
     )
 
-    perm = np.argsort(result.X)
-    ordered_customers = [pending_customers[i] for i in perm]
+    ordered_customers = [pending_customers[i] for i in result.X.astype(int)]
     return [Route(depot=real_end_depot, customers=ordered_customers)]
