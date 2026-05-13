@@ -1,0 +1,188 @@
+"""
+pymoo operator implementations for GA-based VRP routing.
+
+Provides:
+- HeuristicSampling: population initialisation seeded with nearest-neighbour tours
+- LSMutation: Prins (2004) local-search mutation applied after crossover
+"""
+
+from typing import Callable, List
+
+import numpy as np
+from pymoo.core.mutation import Mutation
+from pymoo.core.sampling import Sampling
+
+from core.entities import Customer, Depot
+from algorithms.ga_split import bellman_split
+from algorithms.ga_local_search import local_search
+
+
+def _nearest_neighbor_permutation(
+    customers: List[Customer],
+    start_node,
+    dist_fn: Callable[[int, int], float],
+    first_pos: int | None = None,
+) -> np.ndarray:
+    """
+    Greedy nearest-neighbour giant tour.
+
+    Visits every customer exactly once by always choosing the nearest
+    unvisited customer.  Returns an integer permutation array of shape
+    ``(n,)`` representing visit order (indices into ``customers``).
+
+    Parameters
+    ----------
+    customers:
+        Customer list (same order as chromosome encoding).
+    start_node:
+        Node from which the tour begins (Depot or Customer).
+    dist_fn:
+        O(1) distance callable.
+    first_pos:
+        Index into ``customers`` for the first customer to visit.
+        If None, the customer nearest to ``start_node`` is chosen.
+    """
+    n = len(customers)
+    remaining = list(range(n))
+    tour: List[int] = []
+
+    if first_pos is None:
+        current_pos = min(remaining, key=lambda i: dist_fn(start_node.index, customers[i].index))
+    else:
+        current_pos = first_pos % n  # clamp to valid range
+
+    remaining.remove(current_pos)
+    tour.append(current_pos)
+    current_node = customers[current_pos].index
+
+    while remaining:
+        nearest = min(remaining, key=lambda i: dist_fn(current_node, customers[i].index))
+        tour.append(nearest)
+        current_node = customers[nearest].index
+        remaining.remove(nearest)
+
+    return np.array(tour, dtype=int)
+
+
+class HeuristicSampling(Sampling):
+    """
+    Population initialisation seeded with nearest-neighbour heuristic tours.
+
+    Generates ``n_heuristic`` individuals using the greedy nearest-neighbour
+    heuristic—one deterministic (nearest to ``start_node``) and the rest with
+    random starting customers for diversity—then fills the remainder of the
+    population with random permutations.
+
+    This mirrors Prins (2004) K4, which seeds one individual with the
+    Clarke-Wright savings heuristic and randomises the rest.
+
+    Parameters
+    ----------
+    customers:
+        Customer list (defines the permutation domain).
+    start_node:
+        Starting node for distance evaluation (Depot or Customer).
+    dist_fn:
+        O(1) distance callable.
+    n_heuristic:
+        Number of heuristic-seeded individuals (capped at pop_size).
+    """
+
+    def __init__(
+        self,
+        customers: List[Customer],
+        start_node,
+        dist_fn: Callable[[int, int], float],
+        n_heuristic: int = 1,
+    ) -> None:
+        super().__init__()
+        self.customers = customers
+        self.start_node = start_node
+        self.dist_fn = dist_fn
+        self.n_heuristic = n_heuristic
+
+    def _do(self, problem, n_samples: int, **kwargs) -> np.ndarray:
+        n = len(self.customers)
+        X = np.empty((n_samples, n), dtype=int)
+        rng = np.random.default_rng()
+        n_heuristic = min(self.n_heuristic, n_samples)
+
+        # First: deterministic NN from start_node (nearest customer first)
+        if n_heuristic >= 1:
+            X[0] = _nearest_neighbor_permutation(
+                self.customers, self.start_node, self.dist_fn, first_pos=None
+            )
+
+        # Remaining heuristic individuals: NN with random starting customers
+        for i in range(1, n_heuristic):
+            first_pos = int(rng.integers(0, n))
+            X[i] = _nearest_neighbor_permutation(
+                self.customers, self.start_node, self.dist_fn, first_pos=first_pos
+            )
+
+        # Fill the rest with random permutations
+        for i in range(n_heuristic, n_samples):
+            X[i] = rng.permutation(n)
+
+        return X
+
+
+class LSMutation(Mutation):
+    """
+    Prins (2004) local-search mutation operator for pymoo GA.
+
+    Applied with probability ``prob`` to each child chromosome after crossover.
+    The chromosome is decoded to routes via bellman_split, improved by
+    ``local_search``, then re-encoded back to an integer permutation so pymoo
+    can continue operating on it.
+
+    Parameters
+    ----------
+    depot:
+        The depot used for route evaluation.
+    customers:
+        All customers in the current cluster (defines the permutation encoding).
+    dist_fn:
+        O(1) distance callable.
+    prob:
+        Per-individual mutation probability (passed to pymoo Mutation base).
+    """
+
+    def __init__(
+        self,
+        depot: Depot,
+        customers: List[Customer],
+        dist_fn: Callable[[int, int], float],
+        prob: float,
+    ) -> None:
+        super().__init__(prob=prob)
+        self.depot = depot
+        self.customers = customers
+        self.dist_fn = dist_fn
+        # Map customer object → position in customers list for re-encoding
+        self._customer_pos = {c: i for i, c in enumerate(customers)}
+
+    def _do(self, problem, X: np.ndarray, **kwargs) -> np.ndarray:
+        X = X.copy()
+        n = len(self.customers)
+        if n <= 1:
+            return X
+
+        rng = np.random.default_rng()
+        for k in range(len(X)):
+            if rng.random() >= self.prob.value:
+                continue
+
+            ordered = [self.customers[i] for i in X[k]]
+            segments = bellman_split(ordered, self.depot, self.dist_fn)
+            improved_segs = local_search(segments, self.depot, self.dist_fn)
+
+            # Re-encode: flatten improved segments → integer permutation
+            new_order = [c for route in improved_segs for c in route]
+            if len(new_order) != n:
+                # Fallback: keep original if LS dropped customers (shouldn't happen)
+                continue
+
+            X[k] = np.array([self._customer_pos[c] for c in new_order], dtype=int)
+
+        return X

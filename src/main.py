@@ -102,7 +102,7 @@ def main() -> int:
         [reference_solution, solution],
         titles=[
             f"Reference (obj: {reference_solution.objective:.2f})",
-            f"GA+PSO (cost: {solution.total_cost():.2f})",
+            f"CCBC+GA (cost: {solution.total_cost():.2f})",
         ],
     )
     
@@ -121,7 +121,7 @@ def main() -> int:
             [reference_solution, simulated_solution],
             titles=[
                 f"Reference (obj: {reference_solution.objective:.2f})",
-                f"GA+PSO after simulation (cost: {simulated_solution.total_cost():.2f})",
+                f"CCBC+GA after simulation (cost: {simulated_solution.total_cost():.2f})",
             ],
         )
 
