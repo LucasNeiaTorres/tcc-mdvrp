@@ -1,4 +1,4 @@
-"""Unit tests for the CCBC clustering and PSO routing modules."""
+"""Unit tests for the CCBC clustering and GA routing modules."""
 
 import math
 
@@ -10,7 +10,9 @@ from core.solution import Solution
 from utils.config import CCBCConfig, GAConfig, AppConfig
 
 from algorithms.ccbc_cluster import run_ccbc_clustering
-from algorithms.ga_router import RoutingProblem, run_ga_routing, local_search, _route_cost
+from algorithms.ga_problems import RoutingProblem
+from algorithms.ga_router import run_ga_routing
+from algorithms.ga_local_search import local_search, _route_cost
 from algorithms.ccbc_ga import CCBCGAAlgorithm
 
 
@@ -128,7 +130,7 @@ class TestRoutingProblem:
 
         problem = RoutingProblem(depot=depot, customers=route_customers, dist_fn=dfn)
         out: dict = {}
-        problem._evaluate(np.array([0.5]), out)
+        problem._evaluate(np.array([0]), out)
         # depot(0,0) → (3,4) → depot(0,0) = 5+5 = 10
         assert out["F"] == pytest.approx(10.0)
 
@@ -148,12 +150,11 @@ class TestRoutingProblem:
 
         # Sequential order [0,1,2] → 1+1+1+3 = 6
         out_good: dict = {}
-        problem._evaluate(np.array([0.1, 0.5, 0.9]), out_good)  # argsort → [0,1,2]
+        problem._evaluate(np.array([0, 1, 2]), out_good)
 
-        # Reversed order [2,1,0] → 3+1+1+1 = 6 (same — symmetric)
-        # Try a bad permutation: [2,0,1] → 3+2+1+2 = 8? Let's use a clearly bad one
+        # Permutation [1,2,0]: depot→cs[1]→cs[2]→cs[0]→depot
         out_bad: dict = {}
-        problem._evaluate(np.array([0.9, 0.1, 0.5]), out_bad)  # argsort → [1,2,0]
+        problem._evaluate(np.array([1, 2, 0]), out_bad)
 
         # Both valid; key assertion: no negative costs
         assert out_good["F"] > 0
@@ -228,7 +229,7 @@ class TestLocalSearch:
 
 
 # ---------------------------------------------------------------------------
-# run_pso_routing edge cases
+# run_ga_routing edge cases
 # ---------------------------------------------------------------------------
 
 class TestRunGARouting:
@@ -244,10 +245,10 @@ class TestRunGARouting:
 
 # ---------------------------------------------------------------------------
 # ---------------------------------------------------------------------------
-# CCBCPSOAlgorithm smoke test
+# CCBCGAAlgorithm smoke test
 # ---------------------------------------------------------------------------
 
-class TestCCBCPSOAlgorithm:
+class TestCCBCGAAlgorithm:
     def test_solve_returns_solution(self, depots, customers, app_cfg):
         algo = CCBCGAAlgorithm(app_cfg)
         solution = algo.solve(customers, depots)
