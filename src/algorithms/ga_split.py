@@ -39,8 +39,8 @@ def bellman_split(
     * **Capacity** — total demand ≤ ``depot.max_capacity``.  Enforced via a
       sliding-window front-pruning on the deque.
     * **Duration** — total travel distance + service times ≤
-      ``depot.max_duration``.  Enforced via an exact feasibility check when
-      selecting the best predecessor for each position.
+      ``depot.max_duration``.  Enforced via a sliding-window front-pruning
+      symmetric with capacity.
       When ``depot.max_duration == 0`` the duration constraint is skipped.
     * **Fleet size** — the number of routes is soft-penalised against
       ``depot.max_vehicles``.  All vehicle counts from 1 to n are evaluated;
@@ -158,7 +158,7 @@ def bellman_split(
     # potential[k][t] = min cost of serving customers 1…t with exactly k vehicles
     # pred[k][t]      = predecessor index (start of the last route)
     # ------------------------------------------------------------------
-    
+
     potential = [[INF] * (n + 1) for _ in range(n + 1)]
     pred_arr  = [[-1]  * (n + 1) for _ in range(n + 1)]
     potential[0][0] = 0.0
@@ -176,25 +176,8 @@ def bellman_split(
         dq.append(k)
 
         for t in range(k + 1, n + 1):
-            if len(dq) == 0:
-                break 
-
-            # Select the cheapest feasible predecessor from the deque.
-            # When duration is unconstrained the front is always cheapest (deque invariant).
-            # When duration is constrained we scan from the front (minimum g-value first)
-            # and take the first predecessor whose exact route duration is feasible.
-            if use_duration:
-                best_front = None
-                for candidate in dq:
-                    if _route_duration(candidate, t) <= depot.max_duration + 1e-9:
-                        best_front = candidate
-                        break
-            else:
-                best_front = dq[0]
-
-            if best_front is not None:
-                potential[k + 1][t] = _propagate(best_front, t, k)
-                pred_arr[k + 1][t] = best_front
+            potential[k + 1][t] = _propagate(dq[0], t, k)
+            pred_arr[k + 1][t] = dq[0]
 
             if t < n:
                 # Try to insert t as a new predecessor candidate
@@ -207,6 +190,13 @@ def bellman_split(
                 # would exceed the vehicle capacity.
                 while dq and sum_load[t + 1] - sum_load[dq[0]] > depot.max_capacity + 1e-9:
                     dq.popleft()
+
+                # Duration front-pruning: symmetric with capacity.
+                # _route_duration(front, t+1) is non-decreasing in t (triangle inequality),
+                # so once the front is infeasible it stays infeasible for all future targets.
+                if use_duration:
+                    while dq and _route_duration(dq[0], t + 1) > depot.max_duration + 1e-9:
+                        dq.popleft()
 
             if not dq:
                 break  # no feasible predecessor remains
@@ -234,9 +224,14 @@ def bellman_split(
             best_cost = cost
             best_k = k
 
-    # Fallback: if the linear split found no solution
     if best_k == -1 or best_cost >= INF:
-        return [Route(depot=depot, customers=list(ordered))]
+        raise ValueError(
+            f"bellman_split: no feasible partition found for depot {depot.index} "
+            f"with {len(ordered)} customers (max_capacity={depot.max_capacity}, "
+            f"max_duration={depot.max_duration}). "
+            "Check that every customer's demand ≤ max_capacity and that a "
+            "singleton route for each customer fits within max_duration."
+        )
 
     # Backtrack through pred_arr to recover segments
     segments: List[Route] = []
