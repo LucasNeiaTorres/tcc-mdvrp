@@ -56,10 +56,10 @@ class RoutingProblem(ElementwiseProblem):
 
         total = 0.0
         for seg in segments:
-            total += self.dist_fn(self.start_node.index, seg[0].index)
-            for i in range(len(seg) - 1):
-                total += self.dist_fn(seg[i].index, seg[i + 1].index)
-            total += self.dist_fn(seg[-1].index, self.end_depot.index)
+            total += self.dist_fn(self.start_node.index, seg.customers[0].index)
+            for i in range(len(seg.customers) - 1):
+                total += self.dist_fn(seg.customers[i].index, seg.customers[i + 1].index)
+            total += self.dist_fn(seg.customers[-1].index, self.end_depot.index)
 
         excess = max(0, len(segments) - self.depot.max_vehicles)
         out["F"] = total + excess * total

@@ -8,7 +8,7 @@ and applying the first improving move found, then restarting.
 
 from typing import Callable, List
 
-from core.entities import Customer, Depot
+from core.entities import Customer, Depot, Route
 
 
 def _route_cost(route: List[Customer], depot: Depot, dist_fn: Callable[[int, int], float]) -> float:
@@ -35,7 +35,7 @@ def _is_route_feasible(route: List[Customer], depot: Depot, dist_fn: Callable[[i
 
 
 def local_search(
-    routes: List[List[Customer]],
+    routes: List[Route],
     depot: Depot,
     dist_fn: Callable[[int, int], float],
 ) -> List[List[Customer]]:
@@ -65,7 +65,7 @@ def local_search(
     Cleaned list of non-empty routes.
     """
     # Work on copies so callers keep the originals until committed.
-    routes = [list(r) for r in routes if r]
+    routes = [list(r.customers) for r in routes if r]
 
     def _prev(route: List[Customer], pos: int) -> int:
         """Index of node before route[pos]; returns depot.index if pos == 0."""

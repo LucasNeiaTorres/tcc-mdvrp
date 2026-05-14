@@ -1,4 +1,5 @@
 import argparse
+import time
 from pathlib import Path
 
 from algorithms.ccbc_ga import CCBCGAAlgorithm
@@ -6,7 +7,7 @@ from utils.config import load_config
 from utils.converter import build_customers, build_depots, load_instance
 from utils.data_loader import read_cordeau_data_file, read_cordeau_solution_file, read_failures_file
 from utils.results_io import save_clustering_result, save_routing_result
-from utils.visualizer import visualize_instance, visualize_comparison
+from utils.visualizer import visualize_instance, visualize_comparison, visualize_solution
 from scenario.simulator import SIMULATION_LOG_DIR, run_simulation
 from tools.validate_simulation_log import validate_simulation_log
 
@@ -16,7 +17,7 @@ def main() -> int:
     default_failures_file = None
 
     parser = argparse.ArgumentParser(description="Run and visualize the MDVRP solver on one instance.")
-    parser.add_argument("--instance", default="p01", metavar="NAME", help="Instance name (default: p01).")
+    parser.add_argument("--instance", default="test01", metavar="NAME", help="Instance name (default: p01).")
     parser.add_argument(
         "--failures-file",
         default=default_failures_file,
@@ -59,14 +60,19 @@ def main() -> int:
 
     # Load raw instance and reference solution
     instance = read_cordeau_data_file(str(data_file))
-    reference_solution = read_cordeau_solution_file(str(solution_file), instance)
+    if solution_file.exists():
+        reference_solution = read_cordeau_solution_file(str(solution_file), instance)
+    else:
+        reference_solution = None
     failures = read_failures_file(str(failures_file)) if failures_file is not None else None
 
     cfg = load_config()
 
-    # Run CCBC+PSO algorithm
+    # Run CCBC+GA algorithm
     algorithm = CCBCGAAlgorithm(cfg)
+    t_start = time.perf_counter()
     solution = algorithm.solve(customers, depots)
+    elapsed = time.perf_counter() - t_start
 
     results_dir = base_dir / "data" / "processed" / "results"
     clustering_file = results_dir / f"{data_file.name}_clusters.json"
@@ -85,26 +91,33 @@ def main() -> int:
         solution=solution,
     )
 
-    print(f"Reference   : {reference_solution.objective:.2f}")
+    print(f"Reference   : {reference_solution.objective:.2f}" if reference_solution else "Reference   : N/A")
     print(f"{algorithm}")
     print(
         f"  cost: {solution.total_cost():.2f} "
         f"feasible: {solution.fully_feasible()} "
         f"(routes: {solution.is_feasible()}, fleet: {solution.fleet_is_feasible()})"
     )
+    print(f"  time : {elapsed:.2f}s")
     print(f"Saved clusters : {clustering_file}")
     print(f"Saved routes   : {routing_file}")
 
     # Visualize
-    # visualize_instance(instance)
-    visualize_comparison(
-        instance,
-        [reference_solution, solution],
-        titles=[
-            f"Reference (obj: {reference_solution.objective:.2f})",
-            f"CCBC+GA (cost: {solution.total_cost():.2f})",
-        ],
-    )
+    if reference_solution is not None:
+        visualize_comparison(
+            instance,
+            [reference_solution, solution],
+            titles=[
+                f"Reference (obj: {reference_solution.objective:.2f})",
+                f"CCBC+GA (cost: {solution.total_cost():.2f})",
+            ],
+        )
+    else:
+        visualize_solution(
+            instance,
+            solution,
+            title=f"CCBC+GA solution (cost: {solution.total_cost():.2f})",
+        )
     
     if failures is not None and not args.no_simulate:
         simulated_solution, history_log = run_simulation(
@@ -116,14 +129,21 @@ def main() -> int:
             # output_dir=base_dir / "data" / "processed" / "simulations" / data_file.name,
         )
 
-        visualize_comparison(
-            instance,
-            [reference_solution, simulated_solution],
-            titles=[
-                f"Reference (obj: {reference_solution.objective:.2f})",
-                f"CCBC+GA after simulation (cost: {simulated_solution.total_cost():.2f})",
-            ],
-        )
+        if reference_solution is not None:
+            visualize_comparison(
+                instance,
+                [reference_solution, simulated_solution],
+                titles=[
+                    f"Reference (obj: {reference_solution.objective:.2f})",
+                    f"CCBC+GA after simulation (cost: {simulated_solution.total_cost():.2f})",
+                ],
+            )
+        else:
+            visualize_solution(
+                instance,
+                simulated_solution,
+                title=f"CCBC+GA after simulation (cost: {simulated_solution.total_cost():.2f})",
+            )
 
         log_path = SIMULATION_LOG_DIR / f"{data_file.name}_log.json"
         validation_result = validate_simulation_log(log_path)

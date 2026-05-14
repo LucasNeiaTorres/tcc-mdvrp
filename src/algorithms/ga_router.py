@@ -2,11 +2,11 @@
 GA-based routing entry points for MDVRP.
 
 Thin wrappers that wire together the problem definitions, GA operators, and
-Bellman split to solve the route-optimisation sub-problem for a single depot.
+Vidal (2016) split algorithm to solve the route-optimisation sub-problem for a single depot.
 
 Sub-modules
 -----------
-ga_split        — Bellman (DAG) split algorithm
+ga_split        — Vidal (2016) split algorithm
 ga_local_search — Prins (2004) 9-move local search + route helpers
 ga_problems     — RoutingProblem / DynamicRoutingProblem (pymoo)
 ga_operators    — HeuristicSampling + LSMutation (pymoo)
@@ -84,8 +84,7 @@ def run_ga_routing(
     )
 
     ordered_customers = [customers[i] for i in result.X.astype(int)]
-    segments = bellman_split(ordered_customers, depot, dist_fn)
-    return [Route(depot=depot, customers=seg) for seg in segments]
+    return bellman_split(ordered_customers, depot, dist_fn)
 
 
 def run_ga_reroute(
