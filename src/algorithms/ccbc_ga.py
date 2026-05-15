@@ -27,7 +27,7 @@ from algorithms.ga_router import run_ga_routing, run_ga_reroute
 from core.entities import Customer, Depot
 from core.solution import Solution
 from utils.config import AppConfig, load_config
-
+from concurrent.futures import ProcessPoolExecutor
 
 class CCBCGAAlgorithm(ClusterFirstAlgorithm):
     """
@@ -69,16 +69,12 @@ class CCBCGAAlgorithm(ClusterFirstAlgorithm):
 
     def route(self, clusters: Dict[Depot, List[Customer]]) -> Solution:
         """Phase 2: optimise visiting order and vehicle split per depot via GA."""
-        routes = []
-        for depot, depot_customers in clusters.items():
-            routes.extend(
-                run_ga_routing(
-                    depot=depot,
-                    customers=depot_customers,
-                    dist_fn=self._dist,
-                    cfg=self.cfg.ga,
-                )
-            )
+        with ProcessPoolExecutor() as executor:
+            futures = [
+                executor.submit(run_ga_routing, depot, customers, self._dist, self.cfg.ga)
+                for depot, customers in clusters.items()
+            ]
+            routes = [r for f in futures for r in f.result()]
         return Solution(routes=routes)
 
     def __repr__(self) -> str:
