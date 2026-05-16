@@ -34,9 +34,9 @@ python3 src/scenario/generate_failures.py \
   --instance p01 \
   --seed 42 \
   --severity medium \
-  --events 3 \
+	--dod 0.10 \
   --max-time 120.0
-This will generate a scenario with 3 random edge-block events for instance p01, with trigger times between 0 and 120 minutes, and save it to data/processed/failures/p01_seed42.json.   
+This will generate a scenario with a DoD of 10% for instance p01, with trigger times between 0 and 120 minutes, and save it to data/processed/failures/p01_seed42_dod10.json.
 """
 
 def _default_data_file(instance: str) -> Path:
@@ -44,9 +44,10 @@ def _default_data_file(instance: str) -> Path:
 	return base_dir / "data" / "raw" / "cordeau" / instance
 
 
-def _default_output_file(instance: str, seed: int, n_events: int    ) -> Path:
+def _default_output_file(instance: str, seed: int, dod: float) -> Path:
 	base_dir = Path(__file__).resolve().parents[2]
-	return base_dir / "data" / "processed" / "failures" / f"{instance}_seed{seed}_events{n_events}.json"
+	dod_percent = int(dod * 100)
+	return base_dir / "data" / "processed" / "failures" / f"{instance}_seed{seed}_dod{dod_percent}.json"
 
 
 def generate_events(
@@ -54,6 +55,7 @@ def generate_events(
 	rng: random.Random,
 	n_events: int,
 	max_time: float,
+	dod: float,
 ) -> List[FailureEvent]:
 	"""Generate sorted edge_block events with random trigger times and node pairs."""
 	if n_events < 1:
@@ -62,10 +64,17 @@ def generate_events(
 		raise ValueError("max_time must be > 0")
 	if len(node_ids) < 2:
 		raise ValueError("Need at least 2 nodes to generate edge events")
+	if not (0.0 <= dod <= 1.0):
+		raise ValueError("dod must be between 0.0 and 1.0")
 
 	events: List[FailureEvent] = []
-	for _ in range(n_events):
+	used_edges = set()
+	while len(events) < n_events:
 		node_a, node_b = rng.sample(node_ids, 2)
+		edge_key = (node_a, node_b)
+		if edge_key in used_edges:
+			continue
+		used_edges.add(edge_key)
 		trigger_time = round(rng.uniform(0.0, max_time), 1)
 		events.append(
 			FailureEvent(
@@ -80,17 +89,28 @@ def generate_events(
 	return events
 
 
-def build_payload(instance: str, seed: int, severity: str, events: List[FailureEvent]) -> dict:
+def build_payload(instance: str, seed: int, severity: str, dod: float, events: List[FailureEvent]) -> dict:
 	"""Build the JSON payload in the requested schema."""
 	return {
 		"metadata": {
 			"instance": instance,
 			"seed": seed,
 			"severity": severity,
+			"dod": dod,
 			"generated_at": str(date.today()),
 		},
 		"events": [asdict(event) for event in events],
 	}
+
+
+def _dod_type(value: str) -> float:
+	try:
+		dod = float(value)
+	except ValueError as exc:
+		raise argparse.ArgumentTypeError("dod must be a float between 0.0 and 1.0") from exc
+	if not (0.0 <= dod <= 1.0):
+		raise argparse.ArgumentTypeError("dod must be between 0.0 and 1.0")
+	return dod
 
 
 def parse_args() -> argparse.Namespace:
@@ -103,7 +123,12 @@ def parse_args() -> argparse.Namespace:
 		choices=["low", "medium", "high"],
 		help="Scenario severity label stored in metadata",
 	)
-	parser.add_argument("--events", type=int, default=2, help="Number of edge-block events")
+	parser.add_argument(
+		"--dod",
+		type=_dod_type,
+		default=0.10,
+		help="Degree of dynamism (0.0 to 1.0) as a disruption ratio",
+	)
 	parser.add_argument(
 		"--max-time",
 		type=float,
@@ -128,22 +153,26 @@ def parse_args() -> argparse.Namespace:
 def main() -> None:
 	args = parse_args()
 	data_file = args.data_file or _default_data_file(args.instance)
-	output_file = args.output or _default_output_file(args.instance, args.seed, args.events)
+	output_file = args.output or _default_output_file(args.instance, args.seed, args.dod)
 
 	instance = read_cordeau_data_file(str(data_file))
 	node_ids = [customer.index for customer in instance.customers]
+	total_edges = len(node_ids) * (len(node_ids) - 1)
+	n_events = max(1, round(total_edges * args.dod))
 
 	rng = random.Random(args.seed)
 	events = generate_events(
 		node_ids=node_ids,
 		rng=rng,
-		n_events=args.events,
+		n_events=n_events,
 		max_time=args.max_time,
+		dod=args.dod,
 	)
 	payload = build_payload(
 		instance=args.instance,
 		seed=args.seed,
 		severity=args.severity,
+		dod=args.dod,
 		events=events,
 	)
 
