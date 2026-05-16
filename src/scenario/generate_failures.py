@@ -89,7 +89,7 @@ def generate_events(
 	return events
 
 
-def build_payload(instance: str, seed: int, severity: str, dod: float, events: List[FailureEvent]) -> dict:
+def build_payload(instance: str, seed: int, severity: str, dod: float, edod: float, events: List[FailureEvent]) -> dict:
 	"""Build the JSON payload in the requested schema."""
 	return {
 		"metadata": {
@@ -97,6 +97,7 @@ def build_payload(instance: str, seed: int, severity: str, dod: float, events: L
 			"seed": seed,
 			"severity": severity,
 			"dod": dod,
+			"edod": round(edod, 4),
 			"generated_at": str(date.today()),
 		},
 		"events": [asdict(event) for event in events],
@@ -168,11 +169,15 @@ def main() -> None:
 		max_time=args.max_time,
 		dod=args.dod,
 	)
+	soma_tempos = sum(evento.trigger_time for evento in events)
+	edod = (soma_tempos / len(events)) / args.max_time
+ 
 	payload = build_payload(
 		instance=args.instance,
 		seed=args.seed,
 		severity=args.severity,
 		dod=args.dod,
+		edod=edod,
 		events=events,
 	)
 
