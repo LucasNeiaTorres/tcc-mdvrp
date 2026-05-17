@@ -51,6 +51,7 @@ class RoutingProblem(ElementwiseProblem):
         self.end_depot = depot
 
     def _evaluate(self, x: np.ndarray, out: dict, *args, **kwargs) -> None:
+        x = np.rint(x).astype(int)
         ordered = [self.customers[i] for i in x]
         segments = bellman_split(ordered, self.end_depot, self.dist_fn)
 
@@ -109,6 +110,7 @@ class DynamicRoutingProblem(ElementwiseProblem):
             out["F"] = total
             return
 
+        x = np.rint(x).astype(int)
         ordered = [self.pending_customers[i] for i in x]
 
         total = 0.0
