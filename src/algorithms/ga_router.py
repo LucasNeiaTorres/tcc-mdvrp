@@ -138,6 +138,13 @@ def run_ga_reroute(
             dist_fn=dist_fn,
             n_heuristic=max(1, cfg.pop_size // 5),
         ),
+        crossover=OrderCrossover(),
+        mutation=LSMutation(
+            depot=real_end_depot,
+            customers=pending_customers,
+            dist_fn=dist_fn,
+            prob=cfg.mutation_prob,
+        ),
         eliminate_duplicates=True,
     )
 
