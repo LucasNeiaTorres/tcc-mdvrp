@@ -101,6 +101,7 @@ def run_simulation(
     history_log = []
     total_wasted_distance = 0.0
     current_time = 0.0
+    blocked_edges: set[tuple[int, int]] = set()
 
     # Main simulation loop: process events in chronological order
     while not event_queue.is_empty():
@@ -120,6 +121,7 @@ def run_simulation(
             handle_service_end(event, current_time, vehicle_states)
 
         elif event.type == "edge_block":
+            blocked_edges.add(_normalize_edge(event.payload["node_a"], event.payload["node_b"]))
             reroute_inc, wasted = _handle_disaster(
                 event,
                 current_time,
@@ -129,6 +131,7 @@ def run_simulation(
                 algorithm,
                 instance_name,
                 reroute_count,
+                blocked_edges,
             )
             reroute_count += reroute_inc
             total_wasted_distance += wasted
@@ -220,6 +223,7 @@ def _handle_disaster(
     algorithm: MDVRPAlgorithm,
     instance_name: str,
     reroute_count: int,
+    blocked_edges: set[tuple[int, int]],
 ) -> Tuple[int, float]:
     """
     Handle edge block event by finding affected vehicle and rerouting.
@@ -278,7 +282,8 @@ def _handle_disaster(
     }:
         nodes_for_matrix.append (fixed_next_customer)
     algorithm._build_matrix(nodes_for_matrix, pending_customers)
-    algorithm._set_edge_inf(*broken_edge)
+    for blocked_edge in blocked_edges:
+        algorithm._set_edge_inf(*blocked_edge)
 
     # Reroute using PSO
     if pending_customers:
