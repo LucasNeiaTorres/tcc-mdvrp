@@ -80,7 +80,7 @@ def run_ga_routing(
         algorithm,
         termination=("n_gen", cfg.n_gen),
         seed=cfg.seed,
-        verbose=False,
+        verbose=True,
     )
 
     ordered_customers = [customers[i] for i in result.X.astype(int)]

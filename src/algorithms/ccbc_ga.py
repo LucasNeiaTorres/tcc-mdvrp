@@ -65,6 +65,7 @@ class CCBCGAAlgorithm(ClusterFirstAlgorithm):
             depot.index: [customer.index for customer in assigned]
             for depot, assigned in clusters.items()
         }
+        print(f"CCBC assigned {len(customers)} customers to {len(depots)} depots.")
         return clusters
 
     def route(self, clusters: Dict[Depot, List[Customer]]) -> Solution:
@@ -75,6 +76,7 @@ class CCBCGAAlgorithm(ClusterFirstAlgorithm):
                 for depot, customers in clusters.items()
             ]
             routes = [r for f in futures for r in f.result()]
+        print(f"GA routing completed for {len(clusters)} depots.")
         return Solution(routes=routes)
 
     def __repr__(self) -> str:
