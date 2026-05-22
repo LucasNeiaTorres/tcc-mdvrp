@@ -22,6 +22,23 @@ def _route_cost(route: List[Customer], depot: Depot, dist_fn: Callable[[int, int
     return cost
 
 
+def _open_path_cost(
+    route: List[Customer],
+    start_node: Depot | Customer,
+    end_node: Depot | Customer,
+    dist_fn: Callable[[int, int], float],
+) -> float:
+    """Path cost for start_node -> route -> end_node."""
+    if not route:
+        return dist_fn(start_node.index, end_node.index)
+
+    cost = dist_fn(start_node.index, route[0].index)
+    for i in range(len(route) - 1):
+        cost += dist_fn(route[i].index, route[i + 1].index)
+    cost += dist_fn(route[-1].index, end_node.index)
+    return cost
+
+
 def _is_route_feasible(route: List[Customer], depot: Depot, dist_fn: Callable[[int, int], float]) -> bool:
     """Check capacity and (if constrained) duration feasibility."""
     if sum(c.demand for c in route) > depot.max_capacity:
@@ -34,8 +51,90 @@ def _is_route_feasible(route: List[Customer], depot: Depot, dist_fn: Callable[[i
     return True
 
 
+def local_search_stage1_intra(
+    customers: List[Customer],
+    start_node: Depot | Customer,
+    end_node: Depot | Customer,
+    dist_fn: Callable[[int, int], float],
+) -> List[Customer]:
+    """
+    Stage-1 disaster containment local search.
+
+    Uses exactly three intra-route operators:
+    M1: relocate, M2: swap, M3: 2-opt.
+    """
+    best = list(customers)
+    if len(best) <= 1:
+        return best
+
+    def _duration(route: List[Customer]) -> float:
+        service = sum(c.service_time for c in route)
+        return _open_path_cost(route, start_node, end_node, dist_fn) + service
+
+    best_cost = _duration(best)
+    improved = True
+    while improved:
+        improved = False
+        n = len(best)
+
+        # M1: relocate
+        for from_idx in range(n):
+            if improved:
+                break
+            for to_idx in range(n + 1):
+                if to_idx == from_idx or to_idx == from_idx + 1:
+                    continue
+
+                candidate = list(best)
+                moved = candidate.pop(from_idx)
+                insert_idx = to_idx if to_idx <= from_idx else to_idx - 1
+                candidate.insert(insert_idx, moved)
+                candidate_cost = _duration(candidate)
+                if candidate_cost + 1e-9 < best_cost:
+                    best = candidate
+                    best_cost = candidate_cost
+                    improved = True
+                    break
+
+        if improved:
+            continue
+
+        # M2: swap
+        for i in range(n - 1):
+            if improved:
+                break
+            for j in range(i + 1, n):
+                candidate = list(best)
+                candidate[i], candidate[j] = candidate[j], candidate[i]
+                candidate_cost = _duration(candidate)
+                if candidate_cost + 1e-9 < best_cost:
+                    best = candidate
+                    best_cost = candidate_cost
+                    improved = True
+                    break
+
+        if improved:
+            continue
+
+        # M3: 2-opt
+        for i in range(n - 1):
+            if improved:
+                break
+            for j in range(i + 1, n):
+                candidate = list(best)
+                candidate[i : j + 1] = candidate[i : j + 1][::-1]
+                candidate_cost = _duration(candidate)
+                if candidate_cost + 1e-9 < best_cost:
+                    best = candidate
+                    best_cost = candidate_cost
+                    improved = True
+                    break
+
+    return best
+
+
 def local_search(
-    routes: List[Route],
+    routes: List[Route | List[Customer]],
     depot: Depot,
     dist_fn: Callable[[int, int], float],
 ) -> List[List[Customer]]:
@@ -65,7 +164,15 @@ def local_search(
     Cleaned list of non-empty routes.
     """
     # Work on copies so callers keep the originals until committed.
-    routes = [list(r.customers) for r in routes if r]
+    normalized_routes: List[List[Customer]] = []
+    for route in routes:
+        if not route:
+            continue
+        if isinstance(route, Route):
+            normalized_routes.append(list(route.customers))
+        else:
+            normalized_routes.append(list(route))
+    routes = normalized_routes
 
     def _prev(route: List[Customer], pos: int) -> int:
         """Index of node before route[pos]; returns depot.index if pos == 0."""

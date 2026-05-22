@@ -69,13 +69,29 @@ def build_pending_customers_list(
     affected_vehicle_state: VehicleState,
     fixed_next_customer: Customer | None,
 ) -> List[Customer]:
-    """Build list of pending customers, excluding fixed_next_customer if present."""
-    pending_customers = [
-        affected_vehicle_state.customers_by_index[cid]
-        for cid in sorted(affected_vehicle_state.pending_customer_ids)
-        if fixed_next_customer is None or cid != fixed_next_customer.index
+    """Build pending customers in route order and apply next-node commitment."""
+    ordered_pending_customers = [
+        customer
+        for customer in affected_vehicle_state.route.customers
+        if customer.index in affected_vehicle_state.pending_customer_ids
     ]
-    return pending_customers
+
+    if fixed_next_customer is None:
+        return ordered_pending_customers
+
+    if (
+        ordered_pending_customers
+        and ordered_pending_customers[0].index == fixed_next_customer.index
+    ):
+        # Commitment rule: optimize only pending_customers[1:].
+        return ordered_pending_customers[1:]
+
+    # Safety fallback if state and planned order diverge.
+    return [
+        customer
+        for customer in ordered_pending_customers
+        if customer.index != fixed_next_customer.index
+    ]
 
 
 def determine_fixed_next_customer(

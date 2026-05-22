@@ -7,6 +7,7 @@ import json
 from core.entities import Depot, Customer, Route
 from core.solution import Solution
 from algorithms.base import MDVRPAlgorithm
+from algorithms.ga_local_search import local_search_stage1_intra
 from utils.results_io import save_history_log, save_reroute_result
 
 from .event_queue import EventQueue, SimulationEvent, arrival_events_from_solution
@@ -29,6 +30,7 @@ from .state import VehicleState, _normalize_edge
 
 SIMULATION_LOG_DIR = Path(__file__).resolve().parents[2] / "data" / "processed" / "simulation_logs"
 UNIT_SPEED = 1.0
+DEGRADATION_THRESHOLD = 1.20
 
 
 def _build_vehicle_states(initial_solution: Solution) -> dict[int, VehicleState]:
@@ -227,7 +229,7 @@ def _handle_disaster(
 ) -> Tuple[int, float]:
     """
     Handle edge block event by finding affected vehicle and rerouting.
-    
+
     Returns
     -------
     Tuple[int, float]
@@ -242,8 +244,9 @@ def _handle_disaster(
 
     affected_vehicle_state = vehicle_states[affected_route]
     original_route = affected_vehicle_state.route
+    original_route_duration = original_route.total_duration()
 
-    # Resolve vehicle position and check if traversing the broken edge now
+    # Resolve vehicle position and check if traversing the broken edge now.
     current_node = (
         original_route.depot
         if affected_vehicle_state.current_node_index == original_route.depot.index
@@ -254,75 +257,126 @@ def _handle_disaster(
     leg = affected_vehicle_state.current_leg()
     on_broken_edge = affected_vehicle_state.is_travelling_edge(node_a, node_b)
 
-    # Determine if next customer should be kept fixed
+    # Next-node commitment: keep immediate destination fixed unless this is the current broken leg.
     fixed_next_customer, travel_to_next = determine_fixed_next_customer(
         affected_vehicle_state, on_broken_edge, current_time
     )
 
-    # Calculate wasted distance if on broken edge (U-turn)
+    # U-turn exception: when currently on the broken edge, commitment is broken and wasted travel is accounted.
     wasted_travel_time, wasted_travel_distance, event_start_node, reroute_start_time = calculate_wasted_distance(
         affected_vehicle_state, current_node, on_broken_edge, leg, current_time
     )
 
-    # Build list of pending customers to reroute
+    # Pending pool for optimization (ordered and commitment-aware).
     pending_customers = build_pending_customers_list(affected_vehicle_state, fixed_next_customer)
 
-    # Prepare for rerouting
     broken_edge = _normalize_edge(node_a, node_b)
     reroute_start_node: Depot | Customer = (
         fixed_next_customer if fixed_next_customer is not None else event_start_node
     )
 
-    # Build distance matrix for PSO and mark broken edge as impassable (inf)
+    # Build distance matrix for the local patch and fallback reroute.
     nodes_for_matrix: list[Depot | Customer] = [original_route.depot]
     if isinstance(reroute_start_node, Customer):
         nodes_for_matrix.append(reroute_start_node)
     if fixed_next_customer is not None and fixed_next_customer.index not in {
         node.index for node in nodes_for_matrix
     }:
-        nodes_for_matrix.append (fixed_next_customer)
+        nodes_for_matrix.append(fixed_next_customer)
+
     algorithm._build_matrix(nodes_for_matrix, pending_customers)
     for blocked_edge in blocked_edges:
         algorithm._set_edge_inf(*blocked_edge)
 
-    # Reroute using PSO
-    if pending_customers:
+    historical_wasted_duration = original_route.wasted_duration + wasted_travel_time
+    historical_wasted_distance = original_route.wasted_distance + wasted_travel_distance
+
+    executed_count = max(0, affected_vehicle_state.next_stop_index - 1)
+    executed_customers = original_route.customers[:executed_count]
+
+    # Stage 1: local containment (intra-route M1/M2/M3 only).
+    stage1_pending_customers = local_search_stage1_intra(
+        customers=pending_customers,
+        start_node=reroute_start_node,
+        end_node=original_route.depot,
+        dist_fn=algorithm._dist,
+    )
+    stage1_customers = [
+        *([fixed_next_customer] if fixed_next_customer is not None else []),
+        *stage1_pending_customers,
+    ]
+
+    stage1_combined_route = Route(
+        depot=original_route.depot,
+        customers=[*executed_customers, *stage1_customers],
+        wasted_duration=historical_wasted_duration,
+        wasted_distance=historical_wasted_distance,
+    )
+    stage1_duration_limit = original_route_duration * DEGRADATION_THRESHOLD
+
+    if (
+        stage1_combined_route.is_feasible()
+        and stage1_combined_route.total_duration() <= stage1_duration_limit
+    ):
         print(
-            f"pending_customers for reroute: {[c.index for c in pending_customers]}, "
-            f"fixed_next_customer: {fixed_next_customer.index if fixed_next_customer else None}, "
-            f"start_node: {event_start_node.index}, "
-            f"real_end_depot: {original_route.depot.index}, "
-            f"broken_edge: {broken_edge}"
+            "Stage 1 accepted "
+            f"(duration={stage1_combined_route.total_duration():.2f}, "
+            f"limit={stage1_duration_limit:.2f})."
         )
-        # Call PSO reroute solver (VRP-OD: origin-destination routing)
-        reroute_solution = algorithm.reroute_local(
-            current_start_node=reroute_start_node,
-            pending_customers=pending_customers,
-            real_end_depot=original_route.depot,
+        new_route = Route(
+            depot=original_route.depot,
+            customers=stage1_customers,
+            wasted_duration=historical_wasted_duration,
+            wasted_distance=historical_wasted_distance,
         )
     else:
-        reroute_solution = Solution(routes=[Route(depot=original_route.depot, customers=[])])
+        print(
+            "Stage 1 rejected "
+            f"(duration={stage1_combined_route.total_duration():.2f}, "
+            f"limit={stage1_duration_limit:.2f}, "
+            f"feasible={stage1_combined_route.is_feasible()})."
+        )
+        print("Reverting local patch and proceeding to Stage 2 reroute.")
 
-    print(
-        f"Reroute local returned {len(reroute_solution.routes)} route(s) "
-        f"for depot {affected_vehicle_state.route.depot.index}"
-    )
-    if not reroute_solution.routes:
-        print("Reroute local returned no routes; keeping original route.")
-        return 0, 0.0
+        if pending_customers:
+            print(
+                f"pending_customers for reroute: {[c.index for c in pending_customers]}, "
+                f"fixed_next_customer: {fixed_next_customer.index if fixed_next_customer else None}, "
+                f"start_node: {event_start_node.index}, "
+                f"real_end_depot: {original_route.depot.index}, "
+                f"broken_edge: {broken_edge}"
+            )
+            reroute_solution = algorithm.reroute_local(
+                current_start_node=reroute_start_node,
+                pending_customers=pending_customers,
+                real_end_depot=original_route.depot,
+            )
+        else:
+            reroute_solution = Solution(routes=[Route(depot=original_route.depot, customers=[])])
 
-    if len(reroute_solution.routes) > 1:
-        print("Reroute local returned multiple routes; using the first one for now.")
+        print(
+            f"Reroute local returned {len(reroute_solution.routes)} route(s) "
+            f"for depot {affected_vehicle_state.route.depot.index}"
+        )
+        if not reroute_solution.routes:
+            print("Reroute local returned no routes; keeping original route.")
+            return 0, 0.0
 
-    # Prepend fixed next customer to PSO-optimized route (if applicable)
-    new_route = reroute_solution.routes[0]
-    if fixed_next_customer is not None:
+        if len(reroute_solution.routes) > 1:
+            print("Reroute local returned multiple routes; using the first one for now.")
+
+        stage2_customers = list(reroute_solution.routes[0].customers)
+        if fixed_next_customer is not None:
+            stage2_customers = [fixed_next_customer, *stage2_customers]
+
         new_route = Route(
-            depot=new_route.depot,
-            customers=[fixed_next_customer, *new_route.customers],
+            depot=original_route.depot,
+            customers=stage2_customers,
+            wasted_duration=historical_wasted_duration,
+            wasted_distance=historical_wasted_distance,
         )
 
-    # Build reroute snapshot for output JSON (executed path + future path)
+    # Build reroute snapshot for output JSON (executed path + future path).
     reroute_vehicle_payload = build_reroute_vehicle_payload(
         vehicle_state=affected_vehicle_state,
         original_route=original_route,
@@ -331,16 +385,19 @@ def _handle_disaster(
         wasted_travel_distance=wasted_travel_distance,
     )
 
-    # Merge executed path (completed stops) with rerouted path (future)
-    executed_count = max(0, affected_vehicle_state.next_stop_index - 1)
-    executed_customers = original_route.customers[:executed_count]
+    # Merge executed path (completed stops) with rerouted path (future).
     combined_customers = [*executed_customers, *new_route.customers]
-    combined_route = Route(depot=original_route.depot, customers=combined_customers)
+    combined_route = Route(
+        depot=original_route.depot,
+        customers=combined_customers,
+        wasted_duration=new_route.wasted_duration,
+        wasted_distance=new_route.wasted_distance,
+    )
 
-    # Update solution with combined route
+    # Update solution with combined route.
     current_solution.routes[affected_route - 1] = combined_route
 
-    # Sync vehicle state with new combined route (for future event processing)
+    # Sync vehicle state with new combined route (for future event processing).
     affected_vehicle_state.route = combined_route
     affected_vehicle_state.customers_by_index = {c.index: c for c in combined_route.customers}
     affected_vehicle_state.pending_customer_ids = (
@@ -348,7 +405,7 @@ def _handle_disaster(
     )
     affected_vehicle_state.next_stop_index = executed_count + 1
 
-    # Save reroute result
+    # Save reroute result.
     reroute_index = reroute_count + 1
     time_tag = int(round(current_time * 100))
     output_path = (
@@ -367,7 +424,7 @@ def _handle_disaster(
     )
     print(f"Saved reroute result to {output_path}")
 
-    # Remove old future events for this route and inject new ones based on reroute
+    # Remove old future events for this route and inject new ones based on reroute.
     event_queue.remove_future_events_for_route(affected_route, current_time)
     schedule_rerouted_events(
         event_queue,
@@ -379,7 +436,8 @@ def _handle_disaster(
         affected_vehicle_state,
         fixed_next_customer,
         travel_to_next,
-        stop_index_offset=executed_count
+        stop_index_offset=executed_count,
     )
 
     return 1, wasted_travel_distance
+

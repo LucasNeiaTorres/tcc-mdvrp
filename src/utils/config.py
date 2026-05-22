@@ -5,7 +5,7 @@ Reads config.yaml from the project root and returns typed dataclasses
 so all algorithm modules receive validated, IDE-completable parameters.
 """
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Optional
 
@@ -28,9 +28,15 @@ class GAConfig:
 
 
 @dataclass
+class SimulationConfig:
+    reroute_degradation_threshold: float = 1.20
+
+
+@dataclass
 class AppConfig:
     ccbc: CCBCConfig
     ga: GAConfig
+    simulation: SimulationConfig = field(default_factory=SimulationConfig)
 
 
 def load_config(path: Optional[str] = None) -> AppConfig:
@@ -52,6 +58,7 @@ def load_config(path: Optional[str] = None) -> AppConfig:
 
     ccbc_raw = raw["ccbc"]
     ga_raw = raw["ga"]
+    simulation_raw = raw.get("simulation", {})
 
     return AppConfig(
         ccbc=CCBCConfig(
@@ -64,5 +71,10 @@ def load_config(path: Optional[str] = None) -> AppConfig:
             n_gen=int(ga_raw["n_gen"]),
             seed=int(ga_raw["seed"]),
             mutation_prob=float(ga_raw["mutation_prob"]),
+        ),
+        simulation=SimulationConfig(
+            reroute_degradation_threshold=float(
+                simulation_raw.get("reroute_degradation_threshold", 1.20)
+            ),
         ),
     )

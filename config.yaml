@@ -8,3 +8,6 @@ ga:
   n_gen: 200        # ~30,000 crossovers / σ=30 per Prins (2004) Christofides setting
   seed: 42
   mutation_prob: 0.15 # Prins (2004): pm up to 0.20; higher rate is fine with LS mutation
+
+simulation:
+  reroute_degradation_threshold: 1.20  # Stage-1 acceptance limit for reroute duration (e.g., 1.20 = +20%)

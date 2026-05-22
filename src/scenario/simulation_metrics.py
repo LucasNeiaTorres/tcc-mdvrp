@@ -84,6 +84,8 @@ def calculate_cost_metrics(
 ) -> tuple[float, float, float, float]:
     """Calculate all cost-related metrics."""
     reroute_cost_increase = post_reroute_cost - original_solution_cost
-    realized_cost = post_reroute_cost + total_wasted_distance
+    # Wasted distance is already embedded in Route.total_distance when reroutes are committed.
+    _ = total_wasted_distance
+    realized_cost = post_reroute_cost
     total_cost_impact = realized_cost - original_solution_cost
     return reroute_cost_increase, realized_cost, total_cost_impact, realized_cost

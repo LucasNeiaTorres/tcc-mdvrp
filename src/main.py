@@ -125,7 +125,8 @@ def main() -> int:
             initial_solution=solution,
             failures=failures,
             instance_name=data_file.name,
-            algorithm=algorithm
+            algorithm=algorithm,
+            reroute_degradation_threshold=cfg.simulation.reroute_degradation_threshold,
             # output_dir=base_dir / "data" / "processed" / "simulations" / data_file.name,
         )
 

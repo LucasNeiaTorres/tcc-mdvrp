@@ -12,7 +12,7 @@ from utils.config import CCBCConfig, GAConfig, AppConfig
 from algorithms.ccbc_cluster import run_ccbc_clustering
 from algorithms.ga_problems import RoutingProblem
 from algorithms.ga_router import run_ga_routing
-from algorithms.ga_local_search import local_search, _route_cost
+from algorithms.ga_local_search import local_search, local_search_stage1_intra, _route_cost
 from algorithms.ccbc_ga import CCBCGAAlgorithm
 
 
@@ -226,6 +226,37 @@ class TestLocalSearch:
         improved = local_search(routes, ls_depot, dfn)
         result_indices = sorted(c.index for r in improved for c in r)
         assert result_indices == sorted(c.index for c in customers)
+
+    def test_stage1_intra_cost_non_increasing(self, ls_depot, ls_nodes):
+        """Stage-1 LS should not worsen start->route->end duration."""
+        customers, dfn = ls_nodes
+        start_node = customers[0]
+        end_node = ls_depot
+        pending = [customers[3], customers[2], customers[1]]
+
+        def _open_duration(route):
+            if not route:
+                return dfn(start_node.index, end_node.index)
+            travel = dfn(start_node.index, route[0].index)
+            for i in range(len(route) - 1):
+                travel += dfn(route[i].index, route[i + 1].index)
+            travel += dfn(route[-1].index, end_node.index)
+            return travel + sum(c.service_time for c in route)
+
+        before = _open_duration(pending)
+        improved = local_search_stage1_intra(pending, start_node, end_node, dfn)
+        after = _open_duration(improved)
+        assert after <= before + 1e-9
+
+    def test_stage1_intra_preserves_customers(self, ls_depot, ls_nodes):
+        """Stage-1 LS must preserve customer set exactly once."""
+        customers, dfn = ls_nodes
+        start_node = customers[0]
+        end_node = ls_depot
+        pending = [customers[3], customers[2], customers[1]]
+
+        improved = local_search_stage1_intra(pending, start_node, end_node, dfn)
+        assert sorted(c.index for c in improved) == sorted(c.index for c in pending)
 
 
 # ---------------------------------------------------------------------------

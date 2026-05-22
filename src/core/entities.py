@@ -29,13 +29,15 @@ class Depot:
 class Route:
     depot: Depot
     customers: List[Customer] = field(default_factory=list)
+    wasted_duration: float = 0.0
+    wasted_distance: float = 0.0
 
     def total_demand(self) -> float:
         """Sum of all customer demands in this route."""
         return sum(c.demand for c in self.customers)
 
-    def total_distance(self) -> float:
-        """Total travel distance of the route."""
+    def _projected_distance(self) -> float:
+        """Projected travel distance for the current pending sequence."""
         if not self.customers:
             return 0.0
 
@@ -45,12 +47,17 @@ class Route:
             for i in range(len(nodes) - 1)
         )
 
+    def total_distance(self) -> float:
+        """Holistic route distance: historical waste + projected pending sequence."""
+        return self.wasted_distance + self._projected_distance()
+
     def total_duration(self) -> float:
         """
         Total route duration including travel time and service times.
         Assumes travel time equals travel distance (unit speed).
         """
-        return self.total_distance() + sum(c.service_time for c in self.customers)
+        projected_service = sum(c.service_time for c in self.customers)
+        return self.wasted_duration + self._projected_distance() + projected_service
 
     def is_feasible(self) -> bool:
         """Check whether this route satisfies both capacity and duration constraints."""

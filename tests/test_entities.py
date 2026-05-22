@@ -72,6 +72,24 @@ class TestRoute:
         r = Route(depot=depot, customers=customers)
         assert r.total_duration() == pytest.approx(r.total_distance() + 30)
 
+    def test_total_distance_with_wasted_history(self, route):
+        wasted = 12.5
+        r = Route(
+            depot=route.depot,
+            customers=route.customers,
+            wasted_distance=wasted,
+        )
+        assert r.total_distance() == pytest.approx(route.total_distance() + wasted)
+
+    def test_total_duration_with_wasted_history(self, route):
+        wasted_time = 9.0
+        r = Route(
+            depot=route.depot,
+            customers=route.customers,
+            wasted_duration=wasted_time,
+        )
+        assert r.total_duration() == pytest.approx(route.total_duration() + wasted_time)
+
     def test_depot_index_property(self, route):
         assert route.depot_index == 1
 
