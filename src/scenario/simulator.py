@@ -30,7 +30,6 @@ from .state import VehicleState, _normalize_edge
 
 SIMULATION_LOG_DIR = Path(__file__).resolve().parents[2] / "data" / "processed" / "simulation_logs"
 UNIT_SPEED = 1.0
-DEGRADATION_THRESHOLD = 1.20
 
 
 def _build_vehicle_states(initial_solution: Solution) -> dict[int, VehicleState]:
@@ -55,6 +54,7 @@ def run_simulation(
     failures: List[FailureEvent],
     instance_name: str,
     algorithm: MDVRPAlgorithm,
+    reroute_degradation_threshold: float = 1.20,
 ):
     """
     Run event-driven simulation with dynamic rerouting on edge failures.
@@ -134,6 +134,7 @@ def run_simulation(
                 instance_name,
                 reroute_count,
                 blocked_edges,
+                reroute_degradation_threshold,
             )
             reroute_count += reroute_inc
             total_wasted_distance += wasted
@@ -153,6 +154,7 @@ def run_simulation(
     reroute_cost_increase, realized_cost, total_cost_impact, _ = calculate_cost_metrics(
         original_solution_cost, post_reroute_cost, float(total_wasted_distance)
     )
+    post_reroute_cost_without_wasted = post_reroute_cost - float(total_wasted_distance)
 
     # Extract feasibility metrics from vehicle states and history
     visited = extract_visited_customers(vehicle_states)
@@ -174,8 +176,16 @@ def run_simulation(
     print("--- Simulation summary ---")
     print(f"Original solution cost  : {original_solution_cost:.2f}")
     print(f"Post-reroute cost       : {post_reroute_cost:.2f} (change: {reroute_cost_increase:+.2f})")
+    print(
+        "Post-reroute (sem U-turn embutido): "
+        f"{post_reroute_cost_without_wasted:.2f} "
+        f"(change: {post_reroute_cost_without_wasted - original_solution_cost:+.2f})"
+    )
     print(f"Wasted (U-turns)        : {total_wasted_distance:.2f}")
-    print(f"Realized total cost     : {realized_cost:.2f} (total impact: {total_cost_impact:+.2f})")
+    print(
+        f"Realized total cost     : {realized_cost:.2f} "
+        f"(U-turns ja embutidos, total impact: {total_cost_impact:+.2f})"
+    )
     print(f"Reroute operations      : {reroute_count}")
     if unserved_customers:
         print(f"Unserved customers      : {unserved_customers}")
@@ -195,6 +205,7 @@ def run_simulation(
             "instance": instance_name,
             "original_solution_cost": original_solution_cost,
             "post_reroute_cost": post_reroute_cost,
+            "post_reroute_cost_without_wasted": post_reroute_cost_without_wasted,
             "reroute_cost_increase": reroute_cost_increase,
             "wasted_travel_distance": total_wasted_distance,
             "realized_total_cost": realized_cost,
@@ -226,6 +237,7 @@ def _handle_disaster(
     instance_name: str,
     reroute_count: int,
     blocked_edges: set[tuple[int, int]],
+    reroute_degradation_threshold: float,
 ) -> Tuple[int, float]:
     """
     Handle edge block event by finding affected vehicle and rerouting.
@@ -312,7 +324,7 @@ def _handle_disaster(
         wasted_duration=historical_wasted_duration,
         wasted_distance=historical_wasted_distance,
     )
-    stage1_duration_limit = original_route_duration * DEGRADATION_THRESHOLD
+    stage1_duration_limit = original_route_duration * reroute_degradation_threshold
 
     if (
         stage1_combined_route.is_feasible()
@@ -338,6 +350,7 @@ def _handle_disaster(
         )
         print("Reverting local patch and proceeding to Stage 2 reroute.")
 
+        reroute_solution: Solution | None = None
         if pending_customers:
             print(
                 f"pending_customers for reroute: {[c.index for c in pending_customers]}, "
@@ -346,35 +359,51 @@ def _handle_disaster(
                 f"real_end_depot: {original_route.depot.index}, "
                 f"broken_edge: {broken_edge}"
             )
-            reroute_solution = algorithm.reroute_local(
-                current_start_node=reroute_start_node,
-                pending_customers=pending_customers,
-                real_end_depot=original_route.depot,
-            )
+            try:
+                reroute_solution = algorithm.reroute_local(
+                    current_start_node=reroute_start_node,
+                    pending_customers=pending_customers,
+                    real_end_depot=original_route.depot,
+                )
+            except ValueError as exc:
+                print(f"Stage 2 reroute failed: {exc}")
         else:
             reroute_solution = Solution(routes=[Route(depot=original_route.depot, customers=[])])
 
-        print(
-            f"Reroute local returned {len(reroute_solution.routes)} route(s) "
-            f"for depot {affected_vehicle_state.route.depot.index}"
-        )
-        if not reroute_solution.routes:
-            print("Reroute local returned no routes; keeping original route.")
-            return 0, 0.0
+        if reroute_solution is None:
+            if stage1_combined_route.is_feasible():
+                print("Using Stage 1 feasible route as contingency after Stage 2 failure.")
+                new_route = Route(
+                    depot=original_route.depot,
+                    customers=stage1_customers,
+                    wasted_duration=historical_wasted_duration,
+                    wasted_distance=historical_wasted_distance,
+                )
+            else:
+                print("Stage 2 failed and Stage 1 is infeasible; keeping original route.")
+                return 0, 0.0
+        else:
+            print(
+                f"Reroute local returned {len(reroute_solution.routes)} route(s) "
+                f"for depot {affected_vehicle_state.route.depot.index}"
+            )
+            if not reroute_solution.routes:
+                print("Reroute local returned no routes; keeping original route.")
+                return 0, 0.0
 
-        if len(reroute_solution.routes) > 1:
-            print("Reroute local returned multiple routes; using the first one for now.")
+            if len(reroute_solution.routes) > 1:
+                print("Reroute local returned multiple routes; using the first one for now.")
 
-        stage2_customers = list(reroute_solution.routes[0].customers)
-        if fixed_next_customer is not None:
-            stage2_customers = [fixed_next_customer, *stage2_customers]
+            stage2_customers = list(reroute_solution.routes[0].customers)
+            if fixed_next_customer is not None:
+                stage2_customers = [fixed_next_customer, *stage2_customers]
 
-        new_route = Route(
-            depot=original_route.depot,
-            customers=stage2_customers,
-            wasted_duration=historical_wasted_duration,
-            wasted_distance=historical_wasted_distance,
-        )
+            new_route = Route(
+                depot=original_route.depot,
+                customers=stage2_customers,
+                wasted_duration=historical_wasted_duration,
+                wasted_distance=historical_wasted_distance,
+            )
 
     # Build reroute snapshot for output JSON (executed path + future path).
     reroute_vehicle_payload = build_reroute_vehicle_payload(
