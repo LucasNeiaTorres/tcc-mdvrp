@@ -32,6 +32,24 @@ SIMULATION_LOG_DIR = Path(__file__).resolve().parents[2] / "data" / "processed" 
 UNIT_SPEED = 1.0
 
 
+def _path_uses_blocked_edge(
+    start_node: Depot | Customer,
+    customers: list[Customer],
+    end_node: Depot | Customer,
+    blocked_edges: set[tuple[int, int]],
+) -> bool:
+    if not blocked_edges:
+        return False
+
+    prev_idx = start_node.index
+    for customer in customers:
+        if _normalize_edge(prev_idx, customer.index) in blocked_edges:
+            return True
+        prev_idx = customer.index
+
+    return _normalize_edge(prev_idx, end_node.index) in blocked_edges
+
+
 def _build_vehicle_states(initial_solution: Solution) -> dict[int, VehicleState]:
     """Create one mutable VehicleState per route in the initial solution."""
     vehicle_states: dict[int, VehicleState] = {}
@@ -175,7 +193,6 @@ def run_simulation(
     # Output final simulation metrics
     print("--- Simulation summary ---")
     print(f"Original solution cost  : {original_solution_cost:.2f}")
-    print(f"Post-reroute cost       : {post_reroute_cost:.2f} (change: {reroute_cost_increase:+.2f})")
     print(
         "Post-reroute (sem U-turn embutido): "
         f"{post_reroute_cost_without_wasted:.2f} "
@@ -325,10 +342,23 @@ def _handle_disaster(
         wasted_distance=historical_wasted_distance,
     )
     stage1_duration_limit = original_route_duration * reroute_degradation_threshold
-
+    stage1_uses_blocked_edge = _path_uses_blocked_edge(
+        event_start_node,
+        stage1_customers,
+        original_route.depot,
+        blocked_edges,
+    )
+    print(
+        f"Stage 1 result route: customers={[c.index for c in stage1_customers]}, "
+        f"duration={stage1_combined_route.total_duration():.2f}, "
+        f"limit={stage1_duration_limit:.2f}, "
+        f"fixed_next_customer={fixed_next_customer.index if fixed_next_customer else None}, "
+        f"uses_broken_edge={stage1_uses_blocked_edge}"
+    )
     if (
         stage1_combined_route.is_feasible()
         and stage1_combined_route.total_duration() <= stage1_duration_limit
+        and not stage1_uses_blocked_edge
     ):
         print(
             "Stage 1 accepted "
@@ -346,7 +376,8 @@ def _handle_disaster(
             "Stage 1 rejected "
             f"(duration={stage1_combined_route.total_duration():.2f}, "
             f"limit={stage1_duration_limit:.2f}, "
-            f"feasible={stage1_combined_route.is_feasible()})."
+            f"feasible={stage1_combined_route.is_feasible()}, "
+            f"uses_broken_edge={stage1_uses_blocked_edge})."
         )
         print("Reverting local patch and proceeding to Stage 2 reroute.")
 
