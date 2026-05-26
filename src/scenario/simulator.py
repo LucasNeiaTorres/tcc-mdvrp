@@ -1,16 +1,18 @@
 """Main simulation engine for dynamic vehicle routing with failures."""
 
+from copy import deepcopy
+
 from pathlib import Path
-from typing import List, Tuple
+from typing import Callable, List, Tuple
 import json
 
 from core.entities import Depot, Customer, Route
 from core.solution import Solution
 from algorithms.base import MDVRPAlgorithm
-from algorithms.ga_local_search import local_search_stage1_intra
+from algorithms.ga_local_search import local_search, local_search_stage1_intra
 from utils.results_io import save_history_log, save_reroute_result
 
-from .event_queue import EventQueue, SimulationEvent, arrival_events_from_solution
+from .event_queue import EventQueue, SimulationEvent, arrival_events_from_solution, travel_time
 from .event_handlers import handle_arrival, handle_service_end, determine_fixed_next_customer, build_pending_customers_list
 from .reroute_handler import (
     find_affected_route_by_broken_edge,
@@ -50,6 +52,460 @@ def _path_uses_blocked_edge(
     return _normalize_edge(prev_idx, end_node.index) in blocked_edges
 
 
+def _resolve_current_node(state: VehicleState) -> Depot | Customer:
+    return (
+        state.route.depot
+        if state.current_node_index == state.route.depot.index
+        else state.customers_by_index.get(state.current_node_index, state.route.depot)
+    )
+
+
+def reoptimize_intra_route_stage1(
+    pending_customers: list[Customer],
+    fixed_next_customer: Customer | None,
+    reroute_start_node: Depot | Customer,
+    event_start_node: Depot | Customer,
+    depot: Depot,
+    dist_fn: Callable[[Depot | Customer, Depot | Customer], float],
+    executed_customers: list[Customer],
+    historical_wasted_duration: float,
+    historical_wasted_distance: float,
+    original_route_duration: float,
+    reroute_degradation_threshold: float,
+    blocked_edges: set[tuple[int, int]],
+) -> tuple[list[Customer], Route, bool]:
+    stage1_pending_customers = local_search_stage1_intra(
+        customers=pending_customers,
+        start_node=reroute_start_node,
+        end_node=depot,
+        dist_fn=dist_fn,
+    )
+    stage1_customers = [
+        *([fixed_next_customer] if fixed_next_customer is not None else []),
+        *stage1_pending_customers,
+    ]
+
+    stage1_combined_route = Route(
+        depot=depot,
+        customers=[*executed_customers, *stage1_customers],
+        wasted_duration=historical_wasted_duration,
+        wasted_distance=historical_wasted_distance,
+    )
+    stage1_duration_limit = original_route_duration * reroute_degradation_threshold
+    stage1_uses_blocked_edge = _path_uses_blocked_edge(
+        event_start_node,
+        stage1_customers,
+        depot,
+        blocked_edges,
+    )
+    print(
+        f"Stage 1 result route: customers={[c.index for c in stage1_customers]}, "
+        f"duration={stage1_combined_route.total_duration():.2f}, "
+        f"limit={stage1_duration_limit:.2f}, "
+        f"fixed_next_customer={fixed_next_customer.index if fixed_next_customer else None}, "
+        f"uses_broken_edge={stage1_uses_blocked_edge}"
+    )
+
+    accepted = (
+        stage1_combined_route.is_feasible()
+        and stage1_combined_route.total_duration() <= stage1_duration_limit
+        and not stage1_uses_blocked_edge
+    )
+    if accepted:
+        print(
+            "Stage 1 accepted "
+            f"(duration={stage1_combined_route.total_duration():.2f}, "
+            f"limit={stage1_duration_limit:.2f})."
+        )
+    else:
+        print(
+            "Stage 1 rejected "
+            f"(duration={stage1_combined_route.total_duration():.2f}, "
+            f"limit={stage1_duration_limit:.2f}, "
+            f"feasible={stage1_combined_route.is_feasible()}, "
+            f"uses_broken_edge={stage1_uses_blocked_edge})."
+        )
+
+    return stage1_customers, stage1_combined_route, accepted
+
+
+def reoptimize_intra_cluster(
+    event_queue: EventQueue,
+    vehicle_states: dict[int, VehicleState],
+    current_solution: Solution,
+    algorithm: MDVRPAlgorithm,
+    affected_route_id: int,
+    current_time: float,
+    blocked_edges: set[tuple[int, int]],
+    cluster_degradation_threshold: float,
+    instance_name: str,
+    reroute_index: int,
+    broken_edge: tuple[int, int],
+    event_start_node: Depot | Customer,
+    reroute_start_time: float,
+    wasted_travel_time: float,
+    wasted_travel_distance: float,
+    fixed_next_customer: Customer | None,
+    travel_to_next: float,
+    leg: tuple[int, int] | None,
+    on_broken_edge: bool,
+) -> bool:
+    affected_state = vehicle_states[affected_route_id]
+    depot = affected_state.route.depot
+
+    # Scope to vehicles that belong to the same depot (cluster).
+    cluster_states = [
+        state
+        for state in vehicle_states.values()
+        if state.route.depot.index == depot.index
+    ]
+    if not cluster_states:
+        return False
+
+    def _route_duration_with_return(
+        route: Route,
+        current_node_local: Depot | Customer,
+        wasted_duration_override: float | None = None,
+    ) -> float:
+        if route.customers:
+            if wasted_duration_override is None:
+                return route.total_duration()
+            temp_route = Route(
+                depot=route.depot,
+                customers=list(route.customers),
+                wasted_duration=wasted_duration_override,
+                wasted_distance=route.wasted_distance,
+            )
+            return temp_route.total_duration()
+
+        base_wasted = (
+            wasted_duration_override
+            if wasted_duration_override is not None
+            else route.wasted_duration
+        )
+        if current_node_local.index == route.depot.index:
+            return base_wasted
+        return base_wasted + travel_time(current_node_local, route.depot)
+
+    # Baseline duration for the whole cluster (used by the gatekeeper).
+    original_cluster_duration = 0.0
+    for state in cluster_states:
+        current_node_local = _resolve_current_node(state)
+        if state.route_id == affected_route_id:
+            original_cluster_duration += _route_duration_with_return(
+                state.route,
+                current_node_local,
+                wasted_duration_override=state.route.wasted_duration + wasted_travel_time,
+            )
+        else:
+            original_cluster_duration += _route_duration_with_return(
+                state.route,
+                current_node_local,
+            )
+
+    # Prepare per-route pending sets and a dummy route to drain orphan customers.
+    unassigned_customers: list[Customer] = []
+    cluster_routes: list[list[Customer]] = []
+    route_items: list[dict[str, object]] = []
+    route_items_by_id: dict[int, dict[str, object]] = {}
+    empty_route_items: list[dict[str, object]] = []
+
+    for state in cluster_states:
+        current_node_local = _resolve_current_node(state)
+        executed_count = max(0, state.next_stop_index - 1)
+        executed_customers = state.route.customers[:executed_count]
+
+        if state.route_id == affected_route_id:
+            fixed_next_local = fixed_next_customer
+            travel_to_next_local = travel_to_next
+            event_start_node_local = event_start_node
+            reroute_start_time_local = reroute_start_time
+            historical_wasted_duration = state.route.wasted_duration + wasted_travel_time
+            historical_wasted_distance = state.route.wasted_distance + wasted_travel_distance
+            on_broken_edge_local = on_broken_edge
+            leg_local = leg
+        else:
+            fixed_next_local, travel_to_next_local = determine_fixed_next_customer(
+                state, False, current_time
+            )
+            event_start_node_local = current_node_local
+            reroute_start_time_local = current_time
+            historical_wasted_duration = state.route.wasted_duration
+            historical_wasted_distance = state.route.wasted_distance
+            on_broken_edge_local = False
+            leg_local = state.current_leg()
+
+        pending_customers = build_pending_customers_list(state, fixed_next_local)
+
+        if (
+            state.route_id == affected_route_id
+            and on_broken_edge_local
+            and leg_local is not None
+        ):
+            _, to_idx = leg_local
+            pending_customers = [c for c in pending_customers if c.index != to_idx]
+            removed = state.customers_by_index.get(to_idx)
+            if removed is not None:
+                unassigned_customers.append(removed)
+
+        route_customers: list[Customer] = []
+        if fixed_next_local is not None:
+            route_customers.append(fixed_next_local)
+        route_customers.extend(pending_customers)
+
+        if route_customers:
+            route_item = {
+                "route_id": state.route_id,
+                "state": state,
+                "current_node": current_node_local,
+                "event_start_node": event_start_node_local,
+                "reroute_start_time": reroute_start_time_local,
+                "fixed_next_customer": fixed_next_local,
+                "travel_to_next": travel_to_next_local,
+                "executed_count": executed_count,
+                "executed_customers": executed_customers,
+                "wasted_duration": historical_wasted_duration,
+                "wasted_distance": historical_wasted_distance,
+                "route_customers": route_customers,
+            }
+            route_items.append(route_item)
+            route_items_by_id[state.route_id] = route_item
+            cluster_routes.append(route_customers)
+        elif state.route_id == affected_route_id:
+            route_item = {
+                "route_id": state.route_id,
+                "state": state,
+                "current_node": current_node_local,
+                "event_start_node": event_start_node_local,
+                "reroute_start_time": reroute_start_time_local,
+                "fixed_next_customer": fixed_next_local,
+                "travel_to_next": travel_to_next_local,
+                "executed_count": executed_count,
+                "executed_customers": executed_customers,
+                "wasted_duration": historical_wasted_duration,
+                "wasted_distance": historical_wasted_distance,
+                "route_customers": route_customers,
+            }
+            empty_route_items.append(route_item)
+            route_items_by_id[state.route_id] = route_item
+
+    if not route_items and not empty_route_items:
+        return False
+
+    if not route_items and unassigned_customers:
+        print("Stage 2 rejected: no routes available to absorb unassigned customers.")
+        return False
+
+    # Dummy route is always the last entry to bypass the frozen prefix.
+    cluster_routes.append(list(unassigned_customers))
+
+    unique_customers: dict[int, Customer] = {}
+    for route in cluster_routes:
+        for customer in route:
+            unique_customers[customer.index] = customer
+
+    optimized_routes: list[list[Customer]] = []
+    if route_items:
+        # Build local matrix with blocked edges and run VND local search.
+        algorithm._build_matrix([depot], list(unique_customers.values()))
+        for edge in blocked_edges:
+            algorithm._set_edge_inf(*edge)
+
+        optimized_routes = local_search(
+            deepcopy(cluster_routes),
+            depot,
+            algorithm._dist,
+            is_stage_2=True,
+            apply_frozen_prefix=True,
+        )
+
+    prefix_to_item = {
+        item["route_customers"][0].index: item
+        for item in route_items
+    }
+    assigned_routes: dict[int, list[Customer]] = {}
+    leftover_routes: list[list[Customer]] = []
+
+    for route in optimized_routes:
+        if not route:
+            continue
+        first_idx = route[0].index
+        if first_idx in prefix_to_item and first_idx not in assigned_routes:
+            assigned_routes[first_idx] = route
+        else:
+            leftover_routes.append(route)
+
+    if leftover_routes:
+        leftover_ids = sorted({c.index for route in leftover_routes for c in route})
+        print(
+            "Stage 2 rejected: dummy route not emptied or prefix mismatch. "
+            f"leftover_customers={leftover_ids}"
+        )
+        return False
+
+    for item in route_items:
+        prefix_idx = item["route_customers"][0].index
+        if prefix_idx not in assigned_routes:
+            print("Stage 2 rejected: missing route for frozen prefix.")
+            return False
+
+    new_routes_by_id: dict[int, dict[str, object]] = {}
+    new_cluster_duration = 0.0
+
+    for state in cluster_states:
+        item = route_items_by_id.get(state.route_id)
+        if item is None:
+            new_cluster_duration += _route_duration_with_return(
+                state.route,
+                _resolve_current_node(state),
+            )
+            continue
+
+        if item["route_customers"]:
+            prefix_idx = item["route_customers"][0].index
+            optimized_pending = assigned_routes[prefix_idx]
+        else:
+            optimized_pending = []
+        combined_customers = [*item["executed_customers"], *optimized_pending]
+        combined_route = Route(
+            depot=state.route.depot,
+            customers=combined_customers,
+            wasted_duration=item["wasted_duration"],
+            wasted_distance=item["wasted_distance"],
+        )
+        if combined_route.customers:
+            new_cluster_duration += combined_route.total_duration()
+        else:
+            new_cluster_duration += _route_duration_with_return(
+                combined_route,
+                item["current_node"],
+                wasted_duration_override=item["wasted_duration"],
+            )
+        new_routes_by_id[state.route_id] = {
+            "combined_route": combined_route,
+            "future_route": Route(
+                depot=state.route.depot,
+                customers=optimized_pending,
+                wasted_duration=item["wasted_duration"],
+                wasted_distance=item["wasted_distance"],
+            ),
+            "item": item,
+        }
+
+    # Gatekeeper: feasibility + cluster duration threshold.
+    all_routes_feasible = all(
+        data["combined_route"].is_feasible()
+        for data in new_routes_by_id.values()
+    )
+    is_within_threshold = (
+        new_cluster_duration <= original_cluster_duration * cluster_degradation_threshold
+    )
+
+    if not all_routes_feasible or not is_within_threshold:
+        print(
+            "Stage 2 rejected "
+            f"(feasible={all_routes_feasible}, "
+            f"duration={new_cluster_duration:.2f}, "
+            f"limit={original_cluster_duration * cluster_degradation_threshold:.2f})."
+        )
+        if not all_routes_feasible:
+            print("Stage 2 infeasible routes:")
+            for route_id, data in new_routes_by_id.items():
+                combined_route = data["combined_route"]
+                if combined_route.is_feasible():
+                    continue
+                depot_local = combined_route.depot
+                demand = combined_route.total_demand()
+                duration = combined_route.total_duration()
+                capacity_ok = demand <= depot_local.max_capacity
+                duration_ok = (
+                    depot_local.max_duration == 0
+                    or duration <= depot_local.max_duration
+                )
+                print(
+                    "  "
+                    f"route_id={route_id}, "
+                    f"depot={depot_local.index}, "
+                    f"demand={demand:.2f}/{depot_local.max_capacity:.2f}, "
+                    f"duration={duration:.2f}/{depot_local.max_duration:.2f}, "
+                    f"capacity_ok={capacity_ok}, "
+                    f"duration_ok={duration_ok}"
+                )
+        return False
+
+    delta_pct = 0.0
+    if original_cluster_duration > 0:
+        delta_pct = ((new_cluster_duration - original_cluster_duration) / original_cluster_duration) * 100.0
+    print(
+        "Stage 2 cluster cost change "
+        f"(old={original_cluster_duration:.2f}, "
+        f"new={new_cluster_duration:.2f}, "
+        f"delta={delta_pct:+.2f}%)."
+    )
+
+    affected_data = new_routes_by_id.get(affected_route_id)
+    if affected_data is None:
+        print("Stage 2 rejected: affected route missing in optimized cluster.")
+        return False
+
+    # Save only the affected vehicle payload for the reroute snapshot.
+    reroute_vehicle_payload = build_reroute_vehicle_payload(
+        vehicle_state=affected_state,
+        original_route=affected_state.route,
+        rerouted_route=affected_data["future_route"],
+        wasted_travel_time=wasted_travel_time,
+        wasted_travel_distance=wasted_travel_distance,
+    )
+
+    # Commit cluster-wide updates to solution and vehicle state.
+    for route_id, data in new_routes_by_id.items():
+        current_solution.routes[route_id - 1] = data["combined_route"]
+        state = data["item"]["state"]
+        state.route = data["combined_route"]
+        state.customers_by_index = {c.index: c for c in data["combined_route"].customers}
+        state.pending_customer_ids = (
+            {c.index for c in data["combined_route"].customers}
+            - state.visited_customer_ids
+        )
+        state.next_stop_index = data["item"]["executed_count"] + 1
+
+    time_tag = int(round(current_time * 100))
+    output_path = (
+        f"data/processed/results/{instance_name}_reroute_{reroute_index:03d}_"
+        f"t{time_tag:06d}.json"
+    )
+    save_reroute_result(
+        output_path=output_path,
+        instance_name=instance_name,
+        algorithm_name=f"{algorithm} (reroute {reroute_index})",
+        solution=current_solution,
+        vehicles=[reroute_vehicle_payload],
+        current_time_minutes=current_time,
+        broken_edge=broken_edge,
+        reroute_index=reroute_index,
+    )
+    print(f"Saved reroute result to {output_path}")
+
+    # Reschedule future events for each modified vehicle in the cluster.
+    for route_id, data in new_routes_by_id.items():
+        item = data["item"]
+        event_queue.remove_future_events_for_route(route_id, current_time)
+        schedule_rerouted_events(
+            event_queue,
+            route_id,
+            data["future_route"],
+            item["event_start_node"],
+            item["current_node"],
+            item["reroute_start_time"],
+            item["state"],
+            item["fixed_next_customer"],
+            item["travel_to_next"],
+            stop_index_offset=item["executed_count"],
+        )
+
+    return True
+
+
 def _build_vehicle_states(initial_solution: Solution) -> dict[int, VehicleState]:
     """Create one mutable VehicleState per route in the initial solution."""
     vehicle_states: dict[int, VehicleState] = {}
@@ -73,6 +529,7 @@ def run_simulation(
     instance_name: str,
     algorithm: MDVRPAlgorithm,
     reroute_degradation_threshold: float = 1.20,
+    cluster_degradation_threshold: float = 1.05,
 ):
     """
     Run event-driven simulation with dynamic rerouting on edge failures.
@@ -87,6 +544,8 @@ def run_simulation(
         Instance identifier for output files.
     algorithm : MDVRPAlgorithm
         Algorithm to use for rerouting.
+    cluster_degradation_threshold : float
+        Stage-2 cluster acceptance limit for total duration.
         
     Returns
     -------
@@ -153,6 +612,7 @@ def run_simulation(
                 reroute_count,
                 blocked_edges,
                 reroute_degradation_threshold,
+                cluster_degradation_threshold,
             )
             reroute_count += reroute_inc
             total_wasted_distance += wasted
@@ -255,6 +715,7 @@ def _handle_disaster(
     reroute_count: int,
     blocked_edges: set[tuple[int, int]],
     reroute_degradation_threshold: float,
+    cluster_degradation_threshold: float,
 ) -> Tuple[int, float]:
     """
     Handle edge block event by finding affected vehicle and rerouting.
@@ -320,51 +781,34 @@ def _handle_disaster(
     historical_wasted_duration = original_route.wasted_duration + wasted_travel_time
     historical_wasted_distance = original_route.wasted_distance + wasted_travel_distance
 
+    baseline_route_duration = Route(
+        depot=original_route.depot,
+        customers=list(original_route.customers),
+        wasted_duration=historical_wasted_duration,
+        wasted_distance=historical_wasted_distance,
+    ).total_duration()
+    accepted_stage: str | None = None
+
     executed_count = max(0, affected_vehicle_state.next_stop_index - 1)
     executed_customers = original_route.customers[:executed_count]
 
     # Stage 1: local containment (intra-route M1/M2/M3 only).
-    stage1_pending_customers = local_search_stage1_intra(
-        customers=pending_customers,
-        start_node=reroute_start_node,
-        end_node=original_route.depot,
-        dist_fn=algorithm._dist,
-    )
-    stage1_customers = [
-        *([fixed_next_customer] if fixed_next_customer is not None else []),
-        *stage1_pending_customers,
-    ]
-
-    stage1_combined_route = Route(
+    stage1_customers, stage1_combined_route, stage1_accepted = reoptimize_intra_route_stage1(
+        pending_customers=pending_customers,
+        fixed_next_customer=fixed_next_customer,
+        reroute_start_node=reroute_start_node,
+        event_start_node=event_start_node,
         depot=original_route.depot,
-        customers=[*executed_customers, *stage1_customers],
-        wasted_duration=historical_wasted_duration,
-        wasted_distance=historical_wasted_distance,
+        dist_fn=algorithm._dist,
+        executed_customers=executed_customers,
+        historical_wasted_duration=historical_wasted_duration,
+        historical_wasted_distance=historical_wasted_distance,
+        original_route_duration=original_route_duration,
+        reroute_degradation_threshold=reroute_degradation_threshold,
+        blocked_edges=blocked_edges,
     )
-    stage1_duration_limit = original_route_duration * reroute_degradation_threshold
-    stage1_uses_blocked_edge = _path_uses_blocked_edge(
-        event_start_node,
-        stage1_customers,
-        original_route.depot,
-        blocked_edges,
-    )
-    print(
-        f"Stage 1 result route: customers={[c.index for c in stage1_customers]}, "
-        f"duration={stage1_combined_route.total_duration():.2f}, "
-        f"limit={stage1_duration_limit:.2f}, "
-        f"fixed_next_customer={fixed_next_customer.index if fixed_next_customer else None}, "
-        f"uses_broken_edge={stage1_uses_blocked_edge}"
-    )
-    if (
-        stage1_combined_route.is_feasible()
-        and stage1_combined_route.total_duration() <= stage1_duration_limit
-        and not stage1_uses_blocked_edge
-    ):
-        print(
-            "Stage 1 accepted "
-            f"(duration={stage1_combined_route.total_duration():.2f}, "
-            f"limit={stage1_duration_limit:.2f})."
-        )
+    if stage1_accepted:
+        accepted_stage = "Stage 1"
         new_route = Route(
             depot=original_route.depot,
             customers=stage1_customers,
@@ -372,19 +816,41 @@ def _handle_disaster(
             wasted_distance=historical_wasted_distance,
         )
     else:
-        print(
-            "Stage 1 rejected "
-            f"(duration={stage1_combined_route.total_duration():.2f}, "
-            f"limit={stage1_duration_limit:.2f}, "
-            f"feasible={stage1_combined_route.is_feasible()}, "
-            f"uses_broken_edge={stage1_uses_blocked_edge})."
+        print("Reverting local patch and attempting Stage 2 intra-cluster reoptimization.")
+
+        stage2_ok = reoptimize_intra_cluster(
+            event_queue=event_queue,
+            vehicle_states=vehicle_states,
+            current_solution=current_solution,
+            algorithm=algorithm,
+            affected_route_id=affected_route,
+            current_time=current_time,
+            blocked_edges=blocked_edges,
+            cluster_degradation_threshold=cluster_degradation_threshold,
+            instance_name=instance_name,
+            reroute_index=reroute_count + 1,
+            broken_edge=broken_edge,
+            event_start_node=event_start_node,
+            reroute_start_time=reroute_start_time,
+            wasted_travel_time=wasted_travel_time,
+            wasted_travel_distance=wasted_travel_distance,
+            fixed_next_customer=fixed_next_customer,
+            travel_to_next=travel_to_next,
+            leg=leg,
+            on_broken_edge=on_broken_edge,
         )
-        print("Reverting local patch and proceeding to Stage 2 reroute.")
+        if stage2_ok:
+            return 1, wasted_travel_distance
+
+        print("Stage 2 rejected; proceeding to Stage 3 reroute.")
 
         reroute_solution: Solution | None = None
         if pending_customers:
+            algorithm._build_matrix(nodes_for_matrix, pending_customers)
+            for blocked_edge in blocked_edges:
+                algorithm._set_edge_inf(*blocked_edge)
             print(
-                f"pending_customers for reroute: {[c.index for c in pending_customers]}, "
+                f"pending_customers for stage 3 reroute: {[c.index for c in pending_customers]}, "
                 f"fixed_next_customer: {fixed_next_customer.index if fixed_next_customer else None}, "
                 f"start_node: {event_start_node.index}, "
                 f"real_end_depot: {original_route.depot.index}, "
@@ -404,6 +870,7 @@ def _handle_disaster(
         if reroute_solution is None:
             if stage1_combined_route.is_feasible():
                 print("Using Stage 1 feasible route as contingency after Stage 2 failure.")
+                accepted_stage = "Stage 3 fallback"
                 new_route = Route(
                     depot=original_route.depot,
                     customers=stage1_customers,
@@ -429,6 +896,7 @@ def _handle_disaster(
             if fixed_next_customer is not None:
                 stage2_customers = [fixed_next_customer, *stage2_customers]
 
+            accepted_stage = "Stage 3"
             new_route = Route(
                 depot=original_route.depot,
                 customers=stage2_customers,
@@ -453,6 +921,20 @@ def _handle_disaster(
         wasted_duration=new_route.wasted_duration,
         wasted_distance=new_route.wasted_distance,
     )
+
+    if accepted_stage is not None:
+        route_delta_pct = 0.0
+        if baseline_route_duration > 0:
+            route_delta_pct = (
+                (combined_route.total_duration() - baseline_route_duration)
+                / baseline_route_duration
+            ) * 100.0
+        print(
+            f"{accepted_stage} cost change "
+            f"(old={baseline_route_duration:.2f}, "
+            f"new={combined_route.total_duration():.2f}, "
+            f"delta={route_delta_pct:+.2f}%)."
+        )
 
     # Update solution with combined route.
     current_solution.routes[affected_route - 1] = combined_route

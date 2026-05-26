@@ -139,6 +139,25 @@ def build_future_events_for_route(
     t = start_time
     prev: Depot | Customer = start_node
 
+    if not route.customers:
+        if prev.index == route.depot.index:
+            return events
+        t += travel_time(prev, route.depot)
+        events.append(
+            SimulationEvent(
+                trigger_time=t,
+                type="arrival",
+                payload={
+                    "route_id": route_id,
+                    "depot_index": route.depot.index,
+                    "node_index": route.depot.index,
+                    "stop_index": 1,
+                    "is_return_to_depot": True,
+                },
+            )
+        )
+        return events
+
     for stop_idx, customer in enumerate(route.customers, start=1):
         t += travel_time(prev, customer)
         events.append(

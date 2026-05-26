@@ -137,6 +137,8 @@ def local_search(
     routes: List[Route | List[Customer]],
     depot: Depot,
     dist_fn: Callable[[int, int], float],
+    is_stage_2: bool = False,
+    apply_frozen_prefix: bool = False,
 ) -> List[List[Customer]]:
     """
     Prins (2004) 9-move local search over a multi-route VRP solution.
@@ -158,6 +160,10 @@ def local_search(
         Shared depot for all routes (capacity / duration limits).
     dist_fn:
         O(1) pre-computed distance callable.
+    is_stage_2:
+        Enable VND phase control (INTER -> INTRA) for Stage 2 cluster reopt.
+    apply_frozen_prefix:
+        Protect the first customer of each real route (dummy route exempt).
 
     Returns
     -------
@@ -165,8 +171,11 @@ def local_search(
     """
     # Work on copies so callers keep the originals until committed.
     normalized_routes: List[List[Customer]] = []
-    for route in routes:
+    for idx, route in enumerate(routes):
+        is_last = idx == len(routes) - 1
         if not route:
+            if is_stage_2 and apply_frozen_prefix and is_last:
+                normalized_routes.append([])
             continue
         if isinstance(route, Route):
             normalized_routes.append(list(route.customers))
@@ -182,8 +191,15 @@ def local_search(
         """Index of node after route[pos]; returns depot.index if pos == last."""
         return depot.index if pos == len(route) - 1 else route[pos + 1].index
 
+    current_phase = "INTER" if is_stage_2 else "ALL"
     improved = True
-    while improved:
+
+    while improved or (is_stage_2 and current_phase == "INTER"):
+        if not improved and is_stage_2 and current_phase == "INTER":
+            current_phase = "INTRA"
+            improved = True
+            continue
+
         improved = False
         n_routes = len(routes)
         d = dist_fn  # alias for brevity
@@ -199,6 +215,9 @@ def local_search(
                 for u_idx in range(len(ru)):
                     if improved:
                         break
+                    is_dummy_route = (ru_idx == len(routes) - 1)
+                    if apply_frozen_prefix and u_idx == 0 and not is_dummy_route:
+                        continue
                     u = ru[u_idx]
                     x = ru[u_idx + 1] if u_idx + 1 < len(ru) else depot
 
@@ -207,6 +226,13 @@ def local_search(
                             break
                         if ru_idx == rv_idx and u_idx == v_idx:
                             continue
+
+                        is_intra = (ru_idx == rv_idx)
+                        if current_phase == "INTER" and is_intra:
+                            continue
+                        if current_phase == "INTRA" and not is_intra:
+                            continue
+
                         v = rv[v_idx]
                         y = rv[v_idx + 1] if v_idx + 1 < len(rv) else depot
 
@@ -321,6 +347,10 @@ def local_search(
 
                         if improved:
                             break
+
+                        skip_swap = apply_frozen_prefix and v_idx == 0
+                        if skip_swap:
+                            continue
 
                         # M4: swap u and v
                         if ru_idx == rv_idx and abs(u_idx - v_idx) == 1:

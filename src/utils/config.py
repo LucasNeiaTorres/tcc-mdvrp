@@ -30,6 +30,7 @@ class GAConfig:
 @dataclass
 class SimulationConfig:
     reroute_degradation_threshold: float = 1.20
+    cluster_degradation_threshold: float = 1.05
 
 
 @dataclass
@@ -75,6 +76,9 @@ def load_config(path: Optional[str] = None) -> AppConfig:
         simulation=SimulationConfig(
             reroute_degradation_threshold=float(
                 simulation_raw.get("reroute_degradation_threshold", 1.20)
+            ),
+            cluster_degradation_threshold=float(
+                simulation_raw.get("cluster_degradation_threshold", 1.05)
             ),
         ),
     )
