@@ -74,6 +74,28 @@ def _route_with_same_history(state: VehicleState, customers: list[Customer]) -> 
 	)
 
 
+def _clone_state_with_route(state: VehicleState, route: Route) -> VehicleState:
+	"""Clone a vehicle state while swapping in a new route."""
+	updated = VehicleState(
+		route_id=state.route_id,
+		route=route,
+		current_node_index=state.current_node_index,
+		next_stop_index=state.next_stop_index,
+		last_event_time_min=state.last_event_time_min,
+		visited_customer_ids=set(state.visited_customer_ids),
+		pending_customer_ids=set(),
+		capacity_total=state.capacity_total,
+		load_current=state.load_current,
+		customers_by_index={},
+		status=state.status,
+	)
+	updated.customers_by_index = {customer.index: customer for customer in route.customers}
+	updated.pending_customer_ids = (
+		{customer.index for customer in route.customers} - updated.visited_customer_ids
+	)
+	return updated
+
+
 def stage3_global_cross_depot_repair(
 	target_node: int,
 	vehicle_states: dict[int, VehicleState],
@@ -235,41 +257,14 @@ def stage3_global_cross_depot_repair(
 		*full_customers_after_insert[: best.suffix_start],
 		*optimized_suffix,
 	]
-	winner_state.route = _route_with_same_history(winner_state, updated_winner_customers)
-	winner_state.customers_by_index = {
-		customer.index: customer for customer in winner_state.route.customers
-	}
-	winner_state.pending_customer_ids = (
-		{customer.index for customer in winner_state.route.customers}
-		- winner_state.visited_customer_ids
-	)
-
-	# Transfer target ownership by removing it from blocked vehicle's future plan.
-	blocked_state = vehicle_states.get(blocked_vehicle_id)
-	if blocked_state is not None:
-		blocked_updated_customers = [
-			customer
-			for customer in blocked_state.route.customers
-			if not (
-				customer.index == target_node
-				and customer.index not in blocked_state.visited_customer_ids
-			)
-		]
-		if len(blocked_updated_customers) != len(blocked_state.route.customers):
-			blocked_state.route = _route_with_same_history(blocked_state, blocked_updated_customers)
-			blocked_state.customers_by_index = {
-				customer.index: customer for customer in blocked_state.route.customers
-			}
-			blocked_state.pending_customer_ids = (
-				{customer.index for customer in blocked_state.route.customers}
-				- blocked_state.visited_customer_ids
-			)
+	updated_route = _route_with_same_history(winner_state, updated_winner_customers)
+	updated_winner_state = _clone_state_with_route(winner_state, updated_route)
 
 	print(
 		"[Stage 3][INFO] Winner selected: "
-		f"vehicle={winner_state.route_id}, "
-		f"depot={winner_state.route.depot.index}, "
+		f"vehicle={updated_winner_state.route_id}, "
+		f"depot={updated_winner_state.route.depot.index}, "
 		f"target_node={target_node}, "
 		f"delta_c={best.delta_cost:.4f}."
 	)
-	return winner_state
+	return updated_winner_state
