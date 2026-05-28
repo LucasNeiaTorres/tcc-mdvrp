@@ -28,6 +28,7 @@ from .simulation_metrics import (
     calculate_cost_metrics,
 )
 from .models import FailureEvent
+from .stage3_global_repair import stage3_global_cross_depot_repair
 from .state import VehicleState, _normalize_edge
 
 SIMULATION_LOG_DIR = Path(__file__).resolve().parents[2] / "data" / "processed" / "simulation_logs"
@@ -58,6 +59,66 @@ def _resolve_current_node(state: VehicleState) -> Depot | Customer:
         if state.current_node_index == state.route.depot.index
         else state.customers_by_index.get(state.current_node_index, state.route.depot)
     )
+
+
+def _clone_route(route: Route) -> Route:
+    """Return a shallow route clone preserving historical waste fields."""
+    return Route(
+        depot=route.depot,
+        customers=list(route.customers),
+        wasted_duration=route.wasted_duration,
+        wasted_distance=route.wasted_distance,
+    )
+
+
+def _resolve_stage3_target_node(
+    state: VehicleState,
+    broken_edge: tuple[int, int],
+) -> int | None:
+    """Resolve target_node as the to_idx on the blocked leg in route orientation."""
+    planned_nodes = [
+        state.route.depot.index,
+        *[customer.index for customer in state.route.customers],
+        state.route.depot.index,
+    ]
+    leg_start = max(0, state.next_stop_index - 1)
+    for i in range(leg_start, len(planned_nodes) - 1):
+        if _normalize_edge(planned_nodes[i], planned_nodes[i + 1]) == broken_edge:
+            return planned_nodes[i + 1]
+    return None
+
+
+def _build_stage3_distance_matrix(
+    vehicle_states: dict[int, VehicleState],
+    blocked_edges: set[tuple[int, int]],
+) -> list[list[float]]:
+    """Build node-id-indexed matrix and apply blocked edges as infinite cost."""
+    active_nodes: dict[int, Depot | Customer] = {}
+    for state in vehicle_states.values():
+        active_nodes[state.route.depot.index] = state.route.depot
+        for customer in state.route.customers:
+            active_nodes[customer.index] = customer
+
+    if not active_nodes:
+        return [[0.0]]
+
+    size = max(active_nodes) + 1
+    matrix = [[float("inf")] * size for _ in range(size)]
+
+    for node_id in range(size):
+        matrix[node_id][node_id] = 0.0
+
+    for i, node_i in active_nodes.items():
+        matrix[i][i] = 0.0
+        for j, node_j in active_nodes.items():
+            matrix[i][j] = travel_time(node_i, node_j)
+
+    for node_a, node_b in blocked_edges:
+        if node_a < size and node_b < size:
+            matrix[node_a][node_b] = float("inf")
+            matrix[node_b][node_a] = float("inf")
+
+    return matrix
 
 
 def reoptimize_intra_route_stage1(
@@ -842,34 +903,24 @@ def _handle_disaster(
         if stage2_ok:
             return 1, wasted_travel_distance
 
-        print("Stage 2 rejected; proceeding to Stage 3 reroute.")
+        print("Stage 2 rejected; proceeding to Stage 3 global cross-depot repair.")
 
-        reroute_solution: Solution | None = None
-        if pending_customers:
-            algorithm._build_matrix(nodes_for_matrix, pending_customers)
-            for blocked_edge in blocked_edges:
-                algorithm._set_edge_inf(*blocked_edge)
+        # Align affected vehicle historical waste before Stage 3 transfer updates.
+        affected_vehicle_state.route = Route(
+            depot=affected_vehicle_state.route.depot,
+            customers=list(affected_vehicle_state.route.customers),
+            wasted_duration=historical_wasted_duration,
+            wasted_distance=historical_wasted_distance,
+        )
+
+        target_node = _resolve_stage3_target_node(affected_vehicle_state, broken_edge)
+        if target_node is None:
             print(
-                f"pending_customers for stage 3 reroute: {[c.index for c in pending_customers]}, "
-                f"fixed_next_customer: {fixed_next_customer.index if fixed_next_customer else None}, "
-                f"start_node: {event_start_node.index}, "
-                f"real_end_depot: {original_route.depot.index}, "
-                f"broken_edge: {broken_edge}"
+                "Stage 3 aborted: could not resolve target_node from blocked edge; "
+                "falling back to Stage 1 contingency."
             )
-            try:
-                reroute_solution = algorithm.reroute_local(
-                    current_start_node=reroute_start_node,
-                    pending_customers=pending_customers,
-                    real_end_depot=original_route.depot,
-                )
-            except ValueError as exc:
-                print(f"Stage 2 reroute failed: {exc}")
-        else:
-            reroute_solution = Solution(routes=[Route(depot=original_route.depot, customers=[])])
-
-        if reroute_solution is None:
             if stage1_combined_route.is_feasible():
-                print("Using Stage 1 feasible route as contingency after Stage 2 failure.")
+                print("Using Stage 1 feasible route as contingency after Stage 3 failure.")
                 accepted_stage = "Stage 3 fallback"
                 new_route = Route(
                     depot=original_route.depot,
@@ -878,31 +929,152 @@ def _handle_disaster(
                     wasted_distance=historical_wasted_distance,
                 )
             else:
-                print("Stage 2 failed and Stage 1 is infeasible; keeping original route.")
+                print("Stage 3 failed and Stage 1 is infeasible; keeping original route.")
                 return 0, 0.0
         else:
-            print(
-                f"Reroute local returned {len(reroute_solution.routes)} route(s) "
-                f"for depot {affected_vehicle_state.route.depot.index}"
+            routes_before_stage3 = {
+                route_id: _clone_route(state.route)
+                for route_id, state in vehicle_states.items()
+            }
+            stage3_distance_matrix = _build_stage3_distance_matrix(vehicle_states, blocked_edges)
+            rescued_state = stage3_global_cross_depot_repair(
+                target_node=target_node,
+                vehicle_states=vehicle_states,
+                distance_matrix=stage3_distance_matrix,
+                blocked_vehicle_id=affected_route,
             )
-            if not reroute_solution.routes:
-                print("Reroute local returned no routes; keeping original route.")
-                return 0, 0.0
 
-            if len(reroute_solution.routes) > 1:
-                print("Reroute local returned multiple routes; using the first one for now.")
+            if rescued_state is None:
+                if stage1_combined_route.is_feasible():
+                    print("Using Stage 1 feasible route as contingency after Stage 3 failure.")
+                    accepted_stage = "Stage 3 fallback"
+                    new_route = Route(
+                        depot=original_route.depot,
+                        customers=stage1_customers,
+                        wasted_duration=historical_wasted_duration,
+                        wasted_distance=historical_wasted_distance,
+                    )
+                else:
+                    print("Stage 3 failed and Stage 1 is infeasible; keeping original route.")
+                    return 0, 0.0
+            else:
+                blocked_state = vehicle_states[affected_route]
+                affected_executed_count = max(0, blocked_state.next_stop_index - 1)
+                affected_future_route = Route(
+                    depot=blocked_state.route.depot,
+                    customers=list(blocked_state.route.customers[affected_executed_count:]),
+                    wasted_duration=blocked_state.route.wasted_duration,
+                    wasted_distance=blocked_state.route.wasted_distance,
+                )
 
-            stage2_customers = list(reroute_solution.routes[0].customers)
-            if fixed_next_customer is not None:
-                stage2_customers = [fixed_next_customer, *stage2_customers]
+                current_solution.routes[affected_route - 1] = blocked_state.route
+                if rescued_state.route_id != affected_route:
+                    current_solution.routes[rescued_state.route_id - 1] = rescued_state.route
 
-            accepted_stage = "Stage 3"
-            new_route = Route(
-                depot=original_route.depot,
-                customers=stage2_customers,
-                wasted_duration=historical_wasted_duration,
-                wasted_distance=historical_wasted_distance,
-            )
+                route_delta_pct = 0.0
+                if baseline_route_duration > 0:
+                    route_delta_pct = (
+                        (blocked_state.route.total_duration() - baseline_route_duration)
+                        / baseline_route_duration
+                    ) * 100.0
+                print(
+                    "Stage 3 global cost change "
+                    f"(old={baseline_route_duration:.2f}, "
+                    f"new={blocked_state.route.total_duration():.2f}, "
+                    f"delta={route_delta_pct:+.2f}%)."
+                )
+
+                reroute_vehicles_payload = [
+                    build_reroute_vehicle_payload(
+                        vehicle_state=blocked_state,
+                        original_route=original_route,
+                        rerouted_route=affected_future_route,
+                        wasted_travel_time=wasted_travel_time,
+                        wasted_travel_distance=wasted_travel_distance,
+                    )
+                ]
+
+                if rescued_state.route_id != affected_route:
+                    winner_executed_count = max(0, rescued_state.next_stop_index - 1)
+                    winner_future_route = Route(
+                        depot=rescued_state.route.depot,
+                        customers=list(rescued_state.route.customers[winner_executed_count:]),
+                        wasted_duration=rescued_state.route.wasted_duration,
+                        wasted_distance=rescued_state.route.wasted_distance,
+                    )
+                    winner_original_route = routes_before_stage3[rescued_state.route_id]
+                    reroute_vehicles_payload.append(
+                        build_reroute_vehicle_payload(
+                            vehicle_state=rescued_state,
+                            original_route=winner_original_route,
+                            rerouted_route=winner_future_route,
+                            wasted_travel_time=0.0,
+                            wasted_travel_distance=0.0,
+                        )
+                    )
+
+                reroute_index = reroute_count + 1
+                time_tag = int(round(current_time * 100))
+                output_path = (
+                    f"data/processed/results/{instance_name}_reroute_{reroute_index:03d}_"
+                    f"t{time_tag:06d}.json"
+                )
+                save_reroute_result(
+                    output_path=output_path,
+                    instance_name=instance_name,
+                    algorithm_name=f"{algorithm} (reroute {reroute_index})",
+                    solution=current_solution,
+                    vehicles=reroute_vehicles_payload,
+                    current_time_minutes=current_time,
+                    broken_edge=broken_edge,
+                    reroute_index=reroute_index,
+                )
+                print(f"Saved reroute result to {output_path}")
+
+                event_queue.remove_future_events_for_route(affected_route, current_time)
+                schedule_rerouted_events(
+                    event_queue,
+                    affected_route,
+                    affected_future_route,
+                    event_start_node,
+                    current_node,
+                    reroute_start_time,
+                    blocked_state,
+                    fixed_next_customer,
+                    travel_to_next,
+                    stop_index_offset=affected_executed_count,
+                )
+
+                if rescued_state.route_id != affected_route:
+                    winner_current_node = _resolve_current_node(rescued_state)
+                    winner_fixed_next, winner_travel_to_next = determine_fixed_next_customer(
+                        rescued_state,
+                        on_broken_edge=False,
+                        current_time=current_time,
+                    )
+                    winner_executed_count = max(0, rescued_state.next_stop_index - 1)
+                    winner_future_route = Route(
+                        depot=rescued_state.route.depot,
+                        customers=list(rescued_state.route.customers[winner_executed_count:]),
+                        wasted_duration=rescued_state.route.wasted_duration,
+                        wasted_distance=rescued_state.route.wasted_distance,
+                    )
+
+                    event_queue.remove_future_events_for_route(rescued_state.route_id, current_time)
+                    schedule_rerouted_events(
+                        event_queue,
+                        rescued_state.route_id,
+                        winner_future_route,
+                        winner_current_node,
+                        winner_current_node,
+                        current_time,
+                        rescued_state,
+                        winner_fixed_next,
+                        winner_travel_to_next,
+                        stop_index_offset=winner_executed_count,
+                    )
+
+                return 1, wasted_travel_distance
 
     # Build reroute snapshot for output JSON (executed path + future path).
     reroute_vehicle_payload = build_reroute_vehicle_payload(
