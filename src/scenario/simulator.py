@@ -448,11 +448,25 @@ def reoptimize_intra_cluster(
             "item": item,
         }
 
-    # Gatekeeper: feasibility + cluster duration threshold.
-    all_routes_feasible = all(
-        data["combined_route"].is_feasible()
-        for data in new_routes_by_id.values()
-    )
+    # Gatekeeper: feasibility, broken edge avoidance, and cluster duration threshold.
+    all_routes_feasible = True
+    for route_id, data in new_routes_by_id.items():
+        if not data["combined_route"].is_feasible():
+            all_routes_feasible = False
+            break
+        
+        item = data["item"]
+        uses_broken = _path_uses_blocked_edge(
+            item["event_start_node"],
+            data["future_route"].customers,
+            data["combined_route"].depot,
+            blocked_edges,
+        )
+        if uses_broken:
+            print(f"Stage 2 rejected: route {route_id} attempts to cross a blocked edge.")
+            all_routes_feasible = False
+            break
+
     is_within_threshold = (
         new_cluster_duration <= original_cluster_duration * cluster_degradation_threshold
     )
@@ -652,17 +666,16 @@ def _commit_stage3_updates(
         wasted_distance=blocked_state.route.wasted_distance,
     )
 
-    route_delta_pct = 0.0
-    if baseline_route_duration > 0:
-        route_delta_pct = (
-            (blocked_state.route.total_duration() - baseline_route_duration)
-            / baseline_route_duration
-        ) * 100.0
+    blocked_old = baseline_route_duration
+    blocked_new = blocked_state.route.total_duration()
+    blocked_delta_pct = 0.0
+    if blocked_old > 0:
+        blocked_delta_pct = ((blocked_new - blocked_old) / blocked_old) * 100.0
     print(
-        "Stage 3 global cost change "
-        f"(old={baseline_route_duration:.2f}, "
-        f"new={blocked_state.route.total_duration():.2f}, "
-        f"delta={route_delta_pct:+.2f}%)."
+        "Stage 3 blocked-route change "
+        f"(old={blocked_old:.2f}, "
+        f"new={blocked_new:.2f}, "
+        f"delta={blocked_delta_pct:+.2f}%)."
     )
 
     reroute_vehicles_payload = [
@@ -676,6 +689,8 @@ def _commit_stage3_updates(
     ]
 
     winner_future_route: Route | None = None
+    winner_old = 0.0
+    winner_new = 0.0
     if winner_live_state.route_id != affected_route_id:
         winner_executed_count = max(0, winner_live_state.next_stop_index - 1)
         winner_future_route = Route(
@@ -685,6 +700,17 @@ def _commit_stage3_updates(
             wasted_distance=winner_live_state.route.wasted_distance,
         )
         winner_original_route = routes_before_stage3[winner_live_state.route_id]
+        winner_old = winner_original_route.total_duration()
+        winner_new = winner_live_state.route.total_duration()
+        winner_delta_pct = 0.0
+        if winner_old > 0:
+            winner_delta_pct = ((winner_new - winner_old) / winner_old) * 100.0
+        print(
+            "Stage 3 winner-route change "
+            f"(old={winner_old:.2f}, "
+            f"new={winner_new:.2f}, "
+            f"delta={winner_delta_pct:+.2f}%)."
+        )
         reroute_vehicles_payload.append(
             build_reroute_vehicle_payload(
                 vehicle_state=winner_live_state,
@@ -694,6 +720,20 @@ def _commit_stage3_updates(
                 wasted_travel_distance=0.0,
             )
         )
+    else:
+        print("Stage 3 winner-route change skipped (winner is blocked vehicle).")
+
+    net_old = blocked_old + winner_old
+    net_new = blocked_new + winner_new
+    net_delta_pct = 0.0
+    if net_old > 0:
+        net_delta_pct = ((net_new - net_old) / net_old) * 100.0
+    print(
+        "Stage 3 net change (blocked+winner only) "
+        f"(old={net_old:.2f}, "
+        f"new={net_new:.2f}, "
+        f"delta={net_delta_pct:+.2f}%)."
+    )
 
     time_tag = int(round(current_time * 100))
     output_path = (

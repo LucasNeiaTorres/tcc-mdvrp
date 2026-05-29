@@ -188,6 +188,13 @@ def stage3_global_cross_depot_repair(
 				+ _matrix_distance(distance_matrix, target_node, node_j)
 				- _matrix_distance(distance_matrix, node_i, node_j)
 			)
+   
+			if delta_cost == float("inf"):
+				print(
+					f"[Stage 3][DEBUG] Vehicle {vehicle_id} edge ({node_i},{node_j}) "
+					"rejected: insertion attempts to cross a blocked edge."
+				)
+				continue
 
 			tentative_customers, _ = _insert_target_on_suffix(
 				customers=route_customers,
