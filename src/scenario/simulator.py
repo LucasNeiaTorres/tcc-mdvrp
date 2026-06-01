@@ -600,6 +600,7 @@ def _commit_stage3_updates(
     *,
     winner_state: VehicleState,
     target_node: int,
+    donor_repaired_customers: list[Customer],
     vehicle_states: dict[int, VehicleState],
     current_solution: Solution,
     event_queue: EventQueue,
@@ -621,21 +622,20 @@ def _commit_stage3_updates(
     affected_route_id: int,
 ) -> None:
     blocked_state = vehicle_states[affected_route_id]
+    affected_executed_count = max(0, blocked_state.next_stop_index - 1)
+    
     blocked_updated_customers = [
-        customer
-        for customer in blocked_state.route.customers
-        if not (
-            customer.index == target_node
-            and customer.index not in blocked_state.visited_customer_ids
-        )
+        *blocked_state.route.customers[:affected_executed_count],
+        *donor_repaired_customers
     ]
-    if len(blocked_updated_customers) != len(blocked_state.route.customers):
-        blocked_state.route = Route(
-            depot=blocked_state.route.depot,
-            customers=blocked_updated_customers,
-            wasted_duration=blocked_state.route.wasted_duration,
-            wasted_distance=blocked_state.route.wasted_distance,
-        )
+    
+    blocked_state.route = Route(
+        depot=blocked_state.route.depot,
+        customers=blocked_updated_customers,
+        wasted_duration=blocked_state.route.wasted_duration,
+        wasted_distance=blocked_state.route.wasted_distance,
+    )
+    
     blocked_state.customers_by_index = {
         customer.index: customer for customer in blocked_state.route.customers
     }
@@ -1188,30 +1188,152 @@ def _handle_disaster(
                     print("Stage 3 failed and Stage 1 is infeasible; keeping original route.")
                     return 0, 0.0
             else:
-                _commit_stage3_updates(
-                    winner_state=rescued_state,
-                    target_node=target_node,
-                    vehicle_states=vehicle_states,
-                    current_solution=current_solution,
-                    event_queue=event_queue,
-                    current_time=current_time,
-                    instance_name=instance_name,
-                    algorithm=algorithm,
-                    reroute_index=reroute_count + 1,
-                    broken_edge=broken_edge,
-                    original_route=original_route,
-                    routes_before_stage3=routes_before_stage3,
-                    baseline_route_duration=baseline_route_duration,
-                    event_start_node=event_start_node,
-                    current_node=current_node,
-                    reroute_start_time=reroute_start_time,
-                    fixed_next_customer=fixed_next_customer,
-                    travel_to_next=travel_to_next,
-                    wasted_travel_time=wasted_travel_time,
-                    wasted_travel_distance=wasted_travel_distance,
-                    affected_route_id=affected_route,
+                donor_pending = [c for c in pending_customers if c.index != target_node]
+                
+                algorithm._build_matrix(nodes_for_matrix, pending_customers)
+                for b_edge in blocked_edges:
+                    algorithm._set_edge_inf(*b_edge)
+                
+                # Reoptimize only the tail of the donor route (after the fixed_next_customer), since the prefix is commitment-bound and the target_node is now removed from the donor's pending pool.
+                donor_optimized_tail = local_search_stage1_intra(
+                    customers=donor_pending,
+                    start_node=reroute_start_node,
+                    end_node=original_route.depot,
+                    dist_fn=algorithm._dist,
                 )
-                return 1, wasted_travel_distance
+                
+                # Rebuild the donor's future route with the optimized tail and check for broken edge usage, applying cascading failure cleanup if necessary.
+                donor_future_customers = [
+                    *([fixed_next_customer] if fixed_next_customer is not None else []),
+                    *donor_optimized_tail,
+                ]
+                
+                donor_uses_broken = _path_uses_blocked_edge(
+                    event_start_node,
+                    donor_future_customers,
+                    original_route.depot,
+                    blocked_edges,
+                )
+                
+                cascading_victims = []
+                while donor_uses_broken and donor_optimized_tail:
+                    # Iteratively remove the first customer from the optimized tail (the one closest to the fixed_next_customer) until the broken edge is no longer used or we run out of customers. This simulates a cascading failure effect where customers that cannot be served without crossing the broken edge are dropped.
+                    dropped_customer = donor_optimized_tail.pop(0)
+                    cascading_victims.append(dropped_customer)
+                    
+                    donor_future_customers = [
+                        *([fixed_next_customer] if fixed_next_customer is not None else []),
+                        *donor_optimized_tail,
+                    ]
+                    
+                    donor_uses_broken = _path_uses_blocked_edge(
+                        event_start_node,
+                        donor_future_customers,
+                        original_route.depot,
+                        blocked_edges,
+                    )
+                
+                if cascading_victims:
+                    dropped_ids = [c.index for c in cascading_victims]
+                    print(f"Stage 3 Domino Effect: the following customers had to be dropped from the donor route to eliminate broken edge usage: {dropped_ids}")   
+                
+                if donor_uses_broken and not donor_optimized_tail:
+                    print(f"Stage 3 Warning: Vehicle {rescued_state.route_id} is left with only the fixed next customer and still uses the broken edge. This customer may be effectively unserviceable in the short term.")
+                
+                # If the donor route still uses the broken edge after cleanup, we consider Stage 3 a failure for this iteration, as it indicates that the fixed_next_customer is effectively trapped and cannot be served without crossing the broken edge. In a real-world scenario, this might trigger an alert for manual intervention or a more drastic contingency plan.
+                if donor_uses_broken:
+                    print("Stage 3 aborted: unresolvable broken edge on donor route (likely fixed_next_customer is trapped).")
+                    if stage1_combined_route.is_feasible():
+                        print("Using Stage 1 feasible route as fallback.")
+                        accepted_stage = "Stage 3 fallback"
+                        new_route = Route(
+                            depot=original_route.depot,
+                            customers=stage1_customers,
+                            wasted_duration=historical_wasted_duration,
+                            wasted_distance=historical_wasted_distance,
+                        )
+                    else:
+                        return 0, 0.0
+                else:
+                    _commit_stage3_updates(
+                        winner_state=rescued_state,
+                        target_node=target_node,
+                        donor_repaired_customers=donor_future_customers,
+                        vehicle_states=vehicle_states,
+                        current_solution=current_solution,
+                        event_queue=event_queue,
+                        current_time=current_time,
+                        instance_name=instance_name,
+                        algorithm=algorithm,
+                        reroute_index=reroute_count + 1,
+                        broken_edge=broken_edge,
+                        original_route=original_route,
+                        routes_before_stage3=routes_before_stage3,
+                        baseline_route_duration=baseline_route_duration,
+                        event_start_node=event_start_node,
+                        current_node=current_node,
+                        reroute_start_time=reroute_start_time,
+                        fixed_next_customer=fixed_next_customer,
+                        travel_to_next=travel_to_next,
+                        wasted_travel_time=wasted_travel_time,
+                        wasted_travel_distance=wasted_travel_distance,
+                        affected_route_id=affected_route,
+                    )
+
+                    for orphan in cascading_victims:
+                        orphan_id = orphan.index
+                        print(f"Stage 3 Rescue Operation: Attempting to find a new route for orphaned customer {orphan_id} dropped from donor route {rescued_state.route_id}.")
+                        
+                        # Temporarily inject the orphan customer into the affected vehicle's state to evaluate if any other vehicle can pick it up without crossing the broken edge. This simulates a rescue operation for customers that were collateral damage in the Stage 3 repair.
+                        vehicle_states[affected_route].customers_by_index[orphan_id] = orphan
+                        
+                        orphan_winner_state = stage3_global_cross_depot_repair(
+                            target_node=orphan_id,
+                            vehicle_states=vehicle_states,
+                            distance_matrix=stage3_distance_matrix,
+                            blocked_vehicle_id=affected_route,
+                        )
+                        
+                        # Remove the temporary injection to keep memory clean
+                        del vehicle_states[affected_route].customers_by_index[orphan_id]
+                        
+                        if orphan_winner_state:
+                            w_live = vehicle_states[orphan_winner_state.route_id]
+                            w_live.route = orphan_winner_state.route
+                            w_live.customers_by_index = {c.index: c for c in w_live.route.customers}
+                            w_live.pending_customer_ids = {c.index for c in w_live.route.customers} - w_live.visited_customer_ids
+                            current_solution.routes[w_live.route_id - 1] = w_live.route
+                            
+                            event_queue.remove_future_events_for_route(w_live.route_id, current_time)
+                            
+                            o_exec_count = max(0, w_live.next_stop_index - 1)
+                            o_future_route = Route(
+                                depot=w_live.route.depot,
+                                customers=list(w_live.route.customers[o_exec_count:]),
+                                wasted_duration=w_live.route.wasted_duration,
+                                wasted_distance=w_live.route.wasted_distance,
+                            )
+                            
+                            o_curr_node = _resolve_current_node(w_live)
+                            o_fixed_next, o_travel_to = determine_fixed_next_customer(w_live, False, current_time)
+                            
+                            schedule_rerouted_events(
+                                event_queue,
+                                w_live.route_id,
+                                o_future_route,
+                                o_curr_node,
+                                o_curr_node,
+                                current_time,
+                                w_live,
+                                o_fixed_next,
+                                o_travel_to,
+                                stop_index_offset=o_exec_count,
+                            )
+                            print(f"Stage 3 Rescue Operation: SUCCESS. Orphan customer {orphan_id} rescued by vehicle {w_live.route_id} in a secondary Stage 3 operation.")
+                        else:
+                            print(f"Stage 3 Rescue Operation: FAILED. No vehicle in the network has the capacity/time to save customer {orphan_id}.")
+
+                    return 1, wasted_travel_distance
 
     # Build reroute snapshot for output JSON (executed path + future path).
     reroute_vehicle_payload = build_reroute_vehicle_payload(
