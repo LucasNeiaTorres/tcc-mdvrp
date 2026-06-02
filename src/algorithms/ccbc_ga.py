@@ -23,7 +23,7 @@ from typing import Dict, List
 
 from algorithms.base import ClusterFirstAlgorithm
 from algorithms.ccbc_cluster import run_ccbc_clustering
-from algorithms.ga_router import run_ga_routing, run_ga_reroute
+from algorithms.ga_router import run_ga_routing, run_ga_reroute, GADepotHistory
 from core.entities import Customer, Depot
 from core.solution import Solution
 from utils.config import AppConfig, load_config
@@ -50,6 +50,7 @@ class CCBCGAAlgorithm(ClusterFirstAlgorithm):
             cfg = load_config()
         self.cfg = cfg
         self.last_clusters: Dict[int, List[int]] = {}
+        self.last_ga_history: List[GADepotHistory] = []
 
 
     def cluster(
@@ -75,7 +76,9 @@ class CCBCGAAlgorithm(ClusterFirstAlgorithm):
                 executor.submit(run_ga_routing, depot, customers, self._dist, self.cfg.ga)
                 for depot, customers in clusters.items()
             ]
-            routes = [r for f in futures for r in f.result()]
+            results = [f.result() for f in futures]
+        routes = [r for depot_routes, _ in results for r in depot_routes]
+        self.last_ga_history = [hist for _, hist in results]
         print(f"GA routing completed for {len(clusters)} depots.")
         return Solution(routes=routes)
 

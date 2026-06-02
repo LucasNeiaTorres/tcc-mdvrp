@@ -1,9 +1,11 @@
+import math
 import matplotlib.pyplot as plt
 from typing import List, Optional
 import numpy as np
 
 from .data_loader import CordeauInstance
 from core.protocols import VisualizableSolution
+from algorithms.ga_router import GADepotHistory
 
 
 # ---------------------------------------------------------------------------
@@ -144,5 +146,42 @@ def visualize_comparison(
         _draw_nodes(ax, instance, show_labels)
         _style_ax(ax, title)
 
+    plt.tight_layout()
+    plt.show()
+
+
+def visualize_ga_convergence(histories: List[GADepotHistory]) -> None:
+    """Plot GA convergence (best, mean, mean±std) in one subplot per depot."""
+    active = [h for h in histories if h.best]
+    if not active:
+        return
+
+    n = len(active)
+    ncols = min(n, 3)
+    nrows = math.ceil(n / ncols)
+
+    fig, axes = plt.subplots(nrows, ncols, figsize=(6 * ncols, 4 * nrows), squeeze=False)
+
+    for idx, hist in enumerate(active):
+        ax = axes[idx // ncols][idx % ncols]
+        generations = range(1, len(hist.best) + 1)
+        best = np.array(hist.best)
+        mean = np.array(hist.mean)
+        std = np.array(hist.std)
+
+        ax.plot(generations, best, color="steelblue", linewidth=2, label="Best")
+        ax.plot(generations, mean, color="darkorange", linewidth=1.5, linestyle="--", label="Mean")
+        ax.fill_between(generations, mean - std, mean + std, color="darkorange", alpha=0.2, label="Mean ± Std")
+
+        ax.set_title(f"Depot {hist.depot_index}", fontsize=11, fontweight="bold")
+        ax.set_xlabel("Generation", fontsize=9)
+        ax.set_ylabel("Cost", fontsize=9)
+        ax.legend(fontsize=8)
+        ax.grid(True, alpha=0.3)
+
+    for idx in range(len(active), nrows * ncols):
+        axes[idx // ncols][idx % ncols].set_visible(False)
+
+    fig.suptitle("GA Convergence per Depot", fontsize=13, fontweight="bold")
     plt.tight_layout()
     plt.show()
