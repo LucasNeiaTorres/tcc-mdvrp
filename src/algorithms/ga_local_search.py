@@ -8,6 +8,7 @@ and applying the first improving move found, then restarting.
 
 from typing import Callable, List
 
+from algorithms.ga_split import bellman_split
 from core.entities import Customer, Depot, Route
 
 
@@ -484,6 +485,12 @@ def local_search(
                                     routes[rv_idx] = new_rv
                                     improved = True
                                     break
+
+        # After each improvement, re-run bellman_split on the flattened giant
+        # tour so the vehicle partition is re-optimised before the next LS pass.
+        if improved:
+            flat = [c for route in routes for c in route]
+            routes = [list(r.customers) for r in bellman_split(flat, depot, dist_fn)]
 
     # Remove empty routes and return
     return [r for r in routes if r]
