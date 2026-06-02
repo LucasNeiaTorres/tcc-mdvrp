@@ -22,17 +22,23 @@ with three enhancements described in the CCBC literature:
    the centroid space without losing the geometric signal.
 
 3. Two-phase constrained assignment (run each iteration)
+   Each slot tracks two budgets: remaining capacity and remaining duration.
+   Duration is estimated per customer per slot using nearest-neighbor insertion:
+     estimated_duration = service_time + min dist(customer, assigned_member)
+   For empty slots the centroid distance is used as fallback.
+
    Phase 1 — controversy-ordered greedy:
      Sort customers by controversy score = dist_nearest − dist_second_nearest
      (descending).  Customers with a large gap are most "decided" and are
      assigned first, preserving capacity for ambiguous boundary customers.
-     Each customer is assigned to the nearest slot that still has remaining
-     capacity.
+     Each customer is assigned to the nearest slot that satisfies both
+     remaining capacity and remaining duration constraints.
    Phase 2 — weighted lower-level Voronoi repair:
-     Overflow customers (no slot has capacity) are assigned to the slot that
-     minimises dist × (1 + overload_ratio), where overload_ratio is the
-     fraction of capacity already exceeded.  This approximates the lower-level
-     Voronoi boundary adjustment described in bi-level Voronoi MDVRP approaches.
+     Overflow customers (no slot can satisfy both constraints) are assigned
+     to the slot that minimises dist × (1 + cap_overload + dur_overload),
+     where each overload ratio is the fraction of the respective budget
+     already exceeded.  This approximates the lower-level Voronoi boundary
+     adjustment described in bi-level Voronoi MDVRP approaches.
 
 The best start (lowest total customer-to-centroid distance) is selected as
 the final assignment.
@@ -45,6 +51,7 @@ from typing import Dict, List, Optional, Tuple
 from core.entities import Customer, Depot
 from utils.config import CCBCConfig
 
+# TODO: replace to use config seed
 _RNG_SEED = 42
 
 
@@ -56,7 +63,7 @@ def _euclidean(x1: float, y1: float, x2: float, y2: float) -> float:
     return math.sqrt((x2 - x1) ** 2 + (y2 - y1) ** 2)
 
 
-def _build_slots(depots: List[Depot]) -> Tuple[List[Depot], List[float]]:
+def _build_slots(depots: List[Depot]) -> Tuple[List[Depot], List[float], List[float]]:
     """
     Expand depots into individual vehicle slots.
 
@@ -66,14 +73,18 @@ def _build_slots(depots: List[Depot]) -> Tuple[List[Depot], List[float]]:
         One Depot entry per vehicle (repeated depot.max_vehicles times).
     slot_capacities:
         Per-slot capacity budget = depot.max_capacity.
+    slot_durations:
+        Per-slot duration budget = depot.max_duration (0 means unconstrained).
     """
     slot_depots: List[Depot] = []
     slot_capacities: List[float] = []
+    slot_durations: List[float] = []
     for depot in depots:
         for _ in range(max(1, depot.max_vehicles)):
             slot_depots.append(depot)
             slot_capacities.append(depot.max_capacity)
-    return slot_depots, slot_capacities
+            slot_durations.append(depot.max_duration)
+    return slot_depots, slot_capacities, slot_durations
 
 
 def _simple_kmeans_centroids(
@@ -185,24 +196,44 @@ def _init_centroids(
 def _assign_customers(
     customers: List[Customer],
     slot_capacities: List[float],
+    slot_durations: List[float],
     centroids: List[Tuple[float, float]],
 ) -> List[int]:
     """
-    Two-phase constrained assignment.
+    Two-phase constrained assignment enforcing capacity and duration budgets.
 
-    Phase 1 — controversy-ordered greedy (capacity-respecting).
+    Duration is estimated via nearest-neighbor insertion cost:
+      estimated_duration(c, s) = c.service_time + min dist(c, assigned_member)
+    Empty slots fall back to the centroid distance.
+    Slots with max_duration == 0 are treated as unconstrained for duration.
+
+    Phase 1 — controversy-ordered greedy (capacity- and duration-respecting).
     Phase 2 — weighted lower-level Voronoi repair for overflow customers.
 
     Returns slot index per customer (same order as customers list).
     """
     k = len(centroids)
-    remaining = list(slot_capacities)
+    remaining_cap = list(slot_capacities)
+    remaining_dur = list(slot_durations)
+    # Track customers already assigned to each slot for nearest-neighbor estimation
+    slot_members: List[List[Customer]] = [[] for _ in range(k)]
 
-    # Pre-compute distances: customer i → slot s
+    # Pre-compute centroid distances: customer i → slot s
     dists = [
         [_euclidean(c.x, c.y, centroids[s][0], centroids[s][1]) for s in range(k)]
         for c in customers
     ]
+
+    def _dur_estimate(i: int, s: int) -> float:
+        """service_time + nearest-member travel (falls back to centroid distance)."""
+        c = customers[i]
+        if slot_members[s]:
+            travel = min(
+                _euclidean(c.x, c.y, q.x, q.y) for q in slot_members[s]
+            )
+        else:
+            travel = dists[i][s]
+        return c.service_time + travel
 
     # Controversy = dist_nearest - dist_second_nearest (descending = most decided first)
     def _controversy(i: int) -> float:
@@ -213,32 +244,46 @@ def _assign_customers(
     assignment = [-1] * len(customers)
     overflow: List[int] = []
 
-    # Phase 1: greedy with capacity check
+    # Phase 1: greedy with capacity and duration check
     for i in phase1_order:
         c = customers[i]
         slots_by_dist = sorted(range(k), key=lambda s: dists[i][s])
         chosen = None
         for s in slots_by_dist:
-            if remaining[s] >= c.demand:
+            dur_est = _dur_estimate(i, s)
+            cap_ok = remaining_cap[s] >= c.demand
+            dur_ok = slot_durations[s] == 0 or remaining_dur[s] >= dur_est
+            if cap_ok and dur_ok:
                 chosen = s
                 break
         if chosen is not None:
             assignment[i] = chosen
-            remaining[chosen] -= c.demand
+            remaining_cap[chosen] -= c.demand
+            if slot_durations[chosen] != 0:
+                remaining_dur[chosen] -= _dur_estimate(i, chosen)
+            slot_members[chosen].append(c)
         else:
             overflow.append(i)
 
     # Phase 2: weighted lower-level Voronoi repair
     for i in overflow:
         c = customers[i]
-        # overload_ratio = fraction by which the slot is already over budget
+        # Penalise overloads on both capacity and duration
         def _weight(s: int) -> float:
-            overload = max(0.0, -remaining[s]) / slot_capacities[s] if slot_capacities[s] > 0 else 0.0
-            return dists[i][s] * (1.0 + overload)
+            cap_overload = max(0.0, -remaining_cap[s]) / slot_capacities[s] if slot_capacities[s] > 0 else 0.0
+            dur_overload = (
+                max(0.0, -remaining_dur[s]) / slot_durations[s]
+                if slot_durations[s] > 0
+                else 0.0
+            )
+            return dists[i][s] * (1.0 + cap_overload + dur_overload)
 
         chosen = min(range(k), key=_weight)
         assignment[i] = chosen
-        remaining[chosen] -= c.demand
+        remaining_cap[chosen] -= c.demand
+        if slot_durations[chosen] != 0:
+            remaining_dur[chosen] -= _dur_estimate(i, chosen)
+        slot_members[chosen].append(c)
 
     return assignment
 
@@ -272,7 +317,7 @@ def run_ccbc_clustering(
     if not customers:
         return {depot: [] for depot in depots}
 
-    slot_depots, slot_capacities = _build_slots(depots)
+    slot_depots, slot_capacities, slot_durations = _build_slots(depots)
     k = len(slot_depots)
 
     # Sigma for Gaussian perturbation = 10 % of mean inter-depot distance
@@ -308,7 +353,7 @@ def run_ccbc_clustering(
         assignment = [0] * len(customers)
 
         for _ in range(cfg.max_iter):
-            new_assignment = _assign_customers(customers, slot_capacities, centroids)
+            new_assignment = _assign_customers(customers, slot_capacities, slot_durations, centroids)
 
             # Update centroids to mean of assigned members
             new_centroids: List[Tuple[float, float]] = []
