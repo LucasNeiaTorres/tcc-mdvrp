@@ -102,7 +102,8 @@ def main() -> int:
     )
     print(f"  time : {elapsed:.2f}s")
     for h in algorithm.last_ga_history:
-        print(f"  depot {h.depot_index}: clones removed = {h.clones_removed} (delta={cfg.ga.clone_delta})")
+        early = f", early stop at gen {len(h.best)}" if h.stopped_early else ""
+        print(f"  depot {h.depot_index}: clones removed = {h.clones_removed} (delta={cfg.ga.clone_delta}{early})")
     print(f"Saved clusters : {clustering_file}")
     print(f"Saved routes   : {routing_file}")
 

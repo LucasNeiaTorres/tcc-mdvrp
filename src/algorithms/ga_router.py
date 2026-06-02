@@ -18,6 +18,9 @@ from typing import Callable, List, Tuple
 from pymoo.algorithms.soo.nonconvex.ga import GA
 from pymoo.operators.crossover.ox import OrderCrossover
 from pymoo.optimize import minimize
+from pymoo.termination import get_termination
+from pymoo.termination.collection import TerminationCollection
+from pymoo.termination.default import DefaultSingleObjectiveTermination
 
 from core.entities import Customer, Depot, Route
 from utils.config import GAConfig
@@ -33,6 +36,7 @@ class GADepotHistory:
     mean: List[float] = field(default_factory=list)
     std: List[float] = field(default_factory=list)
     clones_removed: int = 0
+    stopped_early: bool = False
 
 
 def run_ga_routing(
@@ -92,7 +96,14 @@ def run_ga_routing(
     result = minimize(
         problem,
         algorithm,
-        termination=("n_gen", cfg.n_gen),
+        termination=TerminationCollection(
+            DefaultSingleObjectiveTermination(
+                ftol=cfg.stagnation_ftol,
+                period=cfg.stagnation_period,
+                n_max_gen=cfg.n_gen,
+            ),
+            get_termination("time", cfg.time_limit),
+        ),
         seed=cfg.seed,
         save_history=True,
         verbose=True,
@@ -105,6 +116,7 @@ def run_ga_routing(
         mean=[float(f.mean()) for f in gens],
         std=[float(f.std()) for f in gens],
         clones_removed=result.algorithm.survival.eliminated_count,
+        stopped_early=len(gens) < cfg.n_gen,
     )
 
     ordered_customers = [customers[i] for i in result.X.astype(int)]
@@ -177,7 +189,14 @@ def run_ga_reroute(
     result = minimize(
         problem,
         algorithm,
-        termination=("n_gen", cfg.n_gen),
+        termination=TerminationCollection(
+            DefaultSingleObjectiveTermination(
+                ftol=cfg.stagnation_ftol,
+                period=cfg.stagnation_period,
+                n_max_gen=cfg.n_gen,
+            ),
+            get_termination("time", cfg.time_limit),
+        ),
         seed=cfg.seed,
         verbose=False,
     )

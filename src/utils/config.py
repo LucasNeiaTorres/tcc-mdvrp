@@ -27,6 +27,9 @@ class GAConfig:
     mutation_prob: float
     local_search_max_iterations: int
     clone_delta: float
+    stagnation_period: int
+    stagnation_ftol: float
+    time_limit: str
 
 
 @dataclass
@@ -68,5 +71,8 @@ def load_config(path: Optional[str] = None) -> AppConfig:
             mutation_prob=float(ga_raw["mutation_prob"]),
             local_search_max_iterations=int(ga_raw["local_search_max_iterations"]),
             clone_delta=float(ga_raw["clone_delta"]),
+            stagnation_period=int(ga_raw["stagnation_period"]),
+            stagnation_ftol=float(ga_raw["stagnation_ftol"]),
+            time_limit=str(ga_raw["time_limit"]),
         ),
     )
