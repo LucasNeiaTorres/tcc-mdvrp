@@ -11,6 +11,7 @@ from typing import Callable, List
 import numpy as np
 from pymoo.core.mutation import Mutation
 from pymoo.core.sampling import Sampling
+from pymoo.core.survival import Survival
 
 from core.entities import Customer, Depot
 from algorithms.ga_split import bellman_split
@@ -154,11 +155,13 @@ class LSMutation(Mutation):
         customers: List[Customer],
         dist_fn: Callable[[int, int], float],
         prob: float,
+        local_search_max_iterations: int,
     ) -> None:
         super().__init__(prob=prob)
         self.depot = depot
         self.customers = customers
         self.dist_fn = dist_fn
+        self.local_search_max_iterations = local_search_max_iterations
         # Map customer object → position in customers list for re-encoding
         self._customer_pos = {c: i for i, c in enumerate(customers)}
 
@@ -175,7 +178,7 @@ class LSMutation(Mutation):
 
             ordered = [self.customers[i] for i in X[k]]
             segments = bellman_split(ordered, self.depot, self.dist_fn)
-            improved_segs = local_search(segments, self.depot, self.dist_fn)
+            improved_segs = local_search(segments, self.depot, self.dist_fn, self.local_search_max_iterations)
 
             # Re-encode: flatten improved segments → integer permutation
             new_order = [c for route in improved_segs for c in route]
@@ -186,3 +189,53 @@ class LSMutation(Mutation):
             X[k] = np.array([self._customer_pos[c] for c in new_order], dtype=int)
 
         return X
+
+
+class WellSpacedSurvival(Survival):
+    """
+    Vidal (2012) well-spaced population survival selection.
+
+    Sorts the merged population by fitness, then greedily retains individuals
+    whose cost bucket floor(F/delta) has not yet been occupied. This enforces
+    the well-spaced condition from Prins (2004): |F(P1) - F(P2)| >= delta
+    for all pairs in the surviving population.
+
+    If fewer than n_survive well-spaced individuals exist, the remainder is
+    filled with the best remaining individuals (least-bad clones), matching
+    the paper's truncation behaviour.
+
+    Parameters
+    ----------
+    delta:
+        Minimum fitness spacing. delta=1.0 enforces distinct integer costs.
+    """
+
+    def __init__(self, delta: float = 1.0) -> None:
+        super().__init__(filter_infeasible=False)
+        self.delta = delta
+        self.eliminated_count: int = 0
+
+    def _do(self, problem, pop, n_survive, **kwargs):
+        F = pop.get("F").flatten()
+        sorted_idx = np.argsort(F)
+
+        kept = []
+        clones = []
+        occupied: set = set()
+
+        for i in sorted_idx:
+            bucket = int(F[i] / self.delta)
+            if bucket not in occupied:
+                kept.append(i)
+                occupied.add(bucket)
+            else:
+                clones.append(i)
+
+        # Clones that are truly discarded (not needed as fill)
+        n_fill = max(0, n_survive - len(kept))
+        self.eliminated_count += len(clones) - n_fill
+
+        if n_fill > 0:
+            kept.extend(clones[:n_fill])
+
+        return pop[kept[:n_survive]]

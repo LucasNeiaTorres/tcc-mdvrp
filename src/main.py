@@ -17,7 +17,7 @@ def main() -> int:
     default_failures_file = None
 
     parser = argparse.ArgumentParser(description="Run and visualize the MDVRP solver on one instance.")
-    parser.add_argument("--instance", default="test01", metavar="NAME", help="Instance name (default: p01).")
+    parser.add_argument("--instance", default="p04", metavar="NAME", help="Instance name (default: p01).")
     parser.add_argument(
         "--failures-file",
         default=default_failures_file,
@@ -101,6 +101,8 @@ def main() -> int:
         f"(routes: {solution.is_feasible()}, fleet: {solution.fleet_is_feasible()})"
     )
     print(f"  time : {elapsed:.2f}s")
+    for h in algorithm.last_ga_history:
+        print(f"  depot {h.depot_index}: clones removed = {h.clones_removed} (delta={cfg.ga.clone_delta})")
     print(f"Saved clusters : {clustering_file}")
     print(f"Saved routes   : {routing_file}")
 

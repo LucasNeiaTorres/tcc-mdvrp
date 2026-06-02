@@ -23,7 +23,7 @@ from core.entities import Customer, Depot, Route
 from utils.config import GAConfig
 from algorithms.ga_split import bellman_split
 from algorithms.ga_problems import RoutingProblem, DynamicRoutingProblem
-from algorithms.ga_operators import HeuristicSampling, LSMutation
+from algorithms.ga_operators import HeuristicSampling, LSMutation, WellSpacedSurvival
 
 
 @dataclass
@@ -32,6 +32,7 @@ class GADepotHistory:
     best: List[float] = field(default_factory=list)
     mean: List[float] = field(default_factory=list)
     std: List[float] = field(default_factory=list)
+    clones_removed: int = 0
 
 
 def run_ga_routing(
@@ -82,7 +83,9 @@ def run_ga_routing(
             customers=customers,
             dist_fn=dist_fn,
             prob=cfg.mutation_prob,
+            local_search_max_iterations=cfg.local_search_max_iterations,
         ),
+        survival=WellSpacedSurvival(delta=cfg.clone_delta),
         eliminate_duplicates=True,
     )
 
@@ -101,6 +104,7 @@ def run_ga_routing(
         best=[float(f.min()) for f in gens],
         mean=[float(f.mean()) for f in gens],
         std=[float(f.std()) for f in gens],
+        clones_removed=result.algorithm.survival.eliminated_count,
     )
 
     ordered_customers = [customers[i] for i in result.X.astype(int)]
@@ -164,7 +168,9 @@ def run_ga_reroute(
             customers=pending_customers,
             dist_fn=dist_fn,
             prob=cfg.mutation_prob,
+            local_search_max_iterations=cfg.local_search_max_iterations,
         ),
+        survival=WellSpacedSurvival(delta=cfg.clone_delta),
         eliminate_duplicates=True,
     )
 

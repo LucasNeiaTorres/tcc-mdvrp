@@ -173,7 +173,7 @@ def visualize_ga_convergence(histories: List[GADepotHistory]) -> None:
         ax.plot(generations, mean, color="darkorange", linewidth=1.5, linestyle="--", label="Mean")
         ax.fill_between(generations, mean - std, mean + std, color="darkorange", alpha=0.2, label="Mean ± Std")
 
-        ax.set_title(f"Depot {hist.depot_index}", fontsize=11, fontweight="bold")
+        ax.set_title(f"Depot {hist.depot_index}  (clones removed: {hist.clones_removed})", fontsize=11, fontweight="bold")
         ax.set_xlabel("Generation", fontsize=9)
         ax.set_ylabel("Cost", fontsize=9)
         ax.legend(fontsize=8)

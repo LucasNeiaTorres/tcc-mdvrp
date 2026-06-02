@@ -38,6 +38,7 @@ def local_search(
     routes: List[Route],
     depot: Depot,
     dist_fn: Callable[[int, int], float],
+    local_search_max_iterations: int,
 ) -> List[List[Customer]]:
     """
     Prins (2004) 9-move local search over a multi-route VRP solution.
@@ -76,7 +77,9 @@ def local_search(
         return depot.index if pos == len(route) - 1 else route[pos + 1].index
 
     improved = True
-    while improved:
+    iterations = 0
+    while improved and iterations < local_search_max_iterations:
+        iterations += 1
         improved = False
         n_routes = len(routes)
         d = dist_fn  # alias for brevity
