@@ -205,7 +205,7 @@ def reoptimize_intra_cluster(
     travel_to_next: float,
     leg: tuple[int, int] | None,
     on_broken_edge: bool,
-) -> dict[int, dict[str, object]] | None:
+) -> tuple[dict[int, dict[str, object]] | None, dict[int, dict[str, object]] | None]:
     affected_state = vehicle_states[affected_route_id]
     depot = affected_state.route.depot
 
@@ -216,7 +216,7 @@ def reoptimize_intra_cluster(
         if state.route.depot.index == depot.index
     ]
     if not cluster_states:
-        return None
+        return None, None
 
     def _route_duration_with_return(
         route: Route,
@@ -346,11 +346,11 @@ def reoptimize_intra_cluster(
             route_items_by_id[state.route_id] = route_item
 
     if not route_items and not empty_route_items:
-        return None
+        return None, None
 
     if not route_items and unassigned_customers:
         print("Stage 2 rejected: no routes available to absorb unassigned customers.")
-        return None
+        return None, None
 
     # Dummy route is always the last entry to bypass the frozen prefix.
     cluster_routes.append(list(unassigned_customers))
@@ -397,13 +397,13 @@ def reoptimize_intra_cluster(
             "Stage 2 rejected: dummy route not emptied or prefix mismatch. "
             f"leftover_customers={leftover_ids}"
         )
-        return None
+        return None, None
 
     for item in route_items:
         prefix_idx = item["route_customers"][0].index
         if prefix_idx not in assigned_routes:
             print("Stage 2 rejected: missing route for frozen prefix.")
-            return None
+            return None, None
 
     new_routes_by_id: dict[int, dict[str, object]] = {}
     new_cluster_duration = 0.0
@@ -471,37 +471,18 @@ def reoptimize_intra_cluster(
         new_cluster_duration <= original_cluster_duration * cluster_degradation_threshold
     )
 
-    if not all_routes_feasible or not is_within_threshold:
-        print(
-            "Stage 2 rejected "
-            f"(feasible={all_routes_feasible}, "
-            f"duration={new_cluster_duration:.2f}, "
-            f"limit={original_cluster_duration * cluster_degradation_threshold:.2f})."
-        )
-        if not all_routes_feasible:
-            print("Stage 2 infeasible routes:")
-            for route_id, data in new_routes_by_id.items():
-                combined_route = data["combined_route"]
-                if combined_route.is_feasible():
-                    continue
-                depot_local = combined_route.depot
-                demand = combined_route.total_demand()
-                duration = combined_route.total_duration()
-                capacity_ok = demand <= depot_local.max_capacity
-                duration_ok = (
-                    depot_local.max_duration == 0
-                    or duration <= depot_local.max_duration
-                )
-                print(
-                    "  "
-                    f"route_id={route_id}, "
-                    f"depot={depot_local.index}, "
-                    f"demand={demand:.2f}/{depot_local.max_capacity:.2f}, "
-                    f"duration={duration:.2f}/{depot_local.max_duration:.2f}, "
-                    f"capacity_ok={capacity_ok}, "
-                    f"duration_ok={duration_ok}"
-                )
-        return None
+    affected_data = new_routes_by_id.get(affected_route_id)
+    if affected_data is None:
+        print("Stage 2 rejected: affected route missing in optimized cluster.")
+        return None, None
+
+    if not all_routes_feasible:
+        print(f"Stage 2 rejected (infeasible).")
+        return None, None
+
+    if not is_within_threshold:
+        print(f"Stage 2 rejected by threshold but saved as FALLBACK (duration={new_cluster_duration:.2f}, limit={original_cluster_duration * cluster_degradation_threshold:.2f}).")
+        return None, new_routes_by_id
 
     delta_pct = 0.0
     if original_cluster_duration > 0:
@@ -513,12 +494,7 @@ def reoptimize_intra_cluster(
         f"delta={delta_pct:+.2f}%)."
     )
 
-    affected_data = new_routes_by_id.get(affected_route_id)
-    if affected_data is None:
-        print("Stage 2 rejected: affected route missing in optimized cluster.")
-        return None
-
-    return new_routes_by_id
+    return new_routes_by_id, None
 
 
 def _commit_stage2_updates(
@@ -1101,7 +1077,7 @@ def _handle_disaster(
     else:
         print("Reverting local patch and attempting Stage 2 intra-cluster reoptimization.")
 
-        stage2_result = reoptimize_intra_cluster(
+        stage2_accepted, stage2_fallback = reoptimize_intra_cluster(
             vehicle_states=vehicle_states,
             algorithm=algorithm,
             affected_route_id=affected_route,
@@ -1117,9 +1093,9 @@ def _handle_disaster(
             leg=leg,
             on_broken_edge=on_broken_edge,
         )
-        if stage2_result is not None:
+        if stage2_accepted is not None:
             _commit_stage2_updates(
-                new_routes_by_id=stage2_result,
+                new_routes_by_id=stage2_accepted,
                 affected_route_id=affected_route,
                 current_solution=current_solution,
                 event_queue=event_queue,
@@ -1184,8 +1160,25 @@ def _handle_disaster(
                         wasted_duration=historical_wasted_duration,
                         wasted_distance=historical_wasted_distance,
                     )
+                    
+                elif stage2_fallback is not None:
+                    print("Using Stage 2 feasible cluster as contingency after Stage 3 failure.")
+                    _commit_stage2_updates(
+                        new_routes_by_id=stage2_fallback,
+                        affected_route_id=affected_route,
+                        current_solution=current_solution,
+                        event_queue=event_queue,
+                        current_time=current_time,
+                        instance_name=instance_name,
+                        algorithm=algorithm,
+                        reroute_index=reroute_count + 1,
+                        broken_edge=broken_edge,
+                        wasted_travel_time=wasted_travel_time,
+                        wasted_travel_distance=wasted_travel_distance,
+                    )
+                    return 1, wasted_travel_distance
                 else:
-                    print("Stage 3 failed and Stage 1 is infeasible; keeping original route.")
+                    print("Stage 3 failed and Fallbacks are infeasible; keeping original route.")
                     return 0, 0.0
             else:
                 donor_pending = [c for c in pending_customers if c.index != target_node]
