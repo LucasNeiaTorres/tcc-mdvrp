@@ -836,6 +836,7 @@ def run_simulation(
 
     vehicle_states = _build_vehicle_states(current_solution)
     reroute_count = 0
+    reroute_by_stage = {"stage1": 0, "stage2": 0, "stage3": 0}
     history_log = []
     total_wasted_distance = 0.0
     current_time = 0.0
@@ -860,7 +861,7 @@ def run_simulation(
 
         elif event.type == "edge_block":
             blocked_edges.add(_normalize_edge(event.payload["node_a"], event.payload["node_b"]))
-            reroute_inc, wasted = _handle_disaster(
+            reroute_inc, wasted, accepted_stage = _handle_disaster(
                 event,
                 current_time,
                 event_queue,
@@ -874,7 +875,20 @@ def run_simulation(
                 cluster_degradation_threshold,
             )
             reroute_count += reroute_inc
+            if reroute_inc > 0 and accepted_stage in reroute_by_stage:
+                reroute_by_stage[accepted_stage] += reroute_inc
             total_wasted_distance += wasted
+
+    depot_arrival_times = [
+        event_time
+        for event_time, event_type, payload in history_log
+        if event_type == "arrival"
+        and (
+            payload.get("is_return_to_depot", False)
+            or payload.get("node_index") == payload.get("depot_index")
+        )
+    ]
+    total_execution_time = max(depot_arrival_times) if depot_arrival_times else current_time
 
     # Save temporal history log for validation (blocked-edge checks)
     output_path = SIMULATION_LOG_DIR / f"{instance_name}_log.json"
@@ -923,6 +937,16 @@ def run_simulation(
         f"(U-turns ja embutidos, total impact: {total_cost_impact:+.2f})"
     )
     print(f"Reroute operations      : {reroute_count}")
+    print(
+        "Reroutes by stage      : "
+        f"S1={reroute_by_stage['stage1']} | "
+        f"S2={reroute_by_stage['stage2']} | "
+        f"S3={reroute_by_stage['stage3']}"
+    )
+    print(
+        f"Total execution time   : {total_execution_time:.2f} min "
+        "(last arrival at depot)"
+    )
     if unserved_customers:
         print(f"Unserved customers      : {unserved_customers}")
     else:
@@ -946,7 +970,13 @@ def run_simulation(
             "wasted_travel_distance": total_wasted_distance,
             "realized_total_cost": realized_cost,
             "total_cost_impact": total_cost_impact,
+            "total_execution_time_minutes": total_execution_time,
             "reroute_count": reroute_count,
+            "reroute_by_stage": {
+                "stage1": reroute_by_stage["stage1"],
+                "stage2": reroute_by_stage["stage2"],
+                "stage3": reroute_by_stage["stage3"],
+            },
             "unserved_customers": unserved_customers,
             "feasible": routes_feasible_now,
             "fleet_feasible": fleet_feasible_now,
@@ -975,21 +1005,21 @@ def _handle_disaster(
     blocked_edges: set[tuple[int, int]],
     reroute_degradation_threshold: float,
     cluster_degradation_threshold: float,
-) -> Tuple[int, float]:
+) -> Tuple[int, float, str | None]:
     """
     Handle edge block event by finding affected vehicle and rerouting.
 
     Returns
     -------
-    Tuple[int, float]
-        (number of reroutes performed, wasted distance from U-turn).
+    Tuple[int, float, str | None]
+        (number of reroutes performed, wasted distance from U-turn, accepted stage key).
     """
     node_a = event.payload["node_a"]
     node_b = event.payload["node_b"]
 
     affected_route = find_affected_route_by_broken_edge(node_a, node_b, vehicle_states)
     if affected_route is None:
-        return 0, 0.0
+        return 0, 0.0, None
 
     affected_vehicle_state = vehicle_states[affected_route]
     original_route = affected_vehicle_state.route
@@ -1047,6 +1077,7 @@ def _handle_disaster(
         wasted_distance=historical_wasted_distance,
     ).total_duration()
     accepted_stage: str | None = None
+    accepted_stage_key: str | None = None
 
     executed_count = max(0, affected_vehicle_state.next_stop_index - 1)
     executed_customers = original_route.customers[:executed_count]
@@ -1068,6 +1099,7 @@ def _handle_disaster(
     )
     if stage1_accepted:
         accepted_stage = "Stage 1"
+        accepted_stage_key = "stage1"
         new_route = Route(
             depot=original_route.depot,
             customers=stage1_customers,
@@ -1107,7 +1139,7 @@ def _handle_disaster(
                 wasted_travel_time=wasted_travel_time,
                 wasted_travel_distance=wasted_travel_distance,
             )
-            return 1, wasted_travel_distance
+            return 1, wasted_travel_distance, "stage2"
 
         print("Stage 2 rejected; proceeding to Stage 3 global cross-depot repair.")
 
@@ -1128,6 +1160,7 @@ def _handle_disaster(
             if stage1_combined_route.is_feasible():
                 print("Using Stage 1 feasible route as contingency after Stage 3 failure.")
                 accepted_stage = "Stage 3 fallback"
+                accepted_stage_key = "stage1"
                 new_route = Route(
                     depot=original_route.depot,
                     customers=stage1_customers,
@@ -1136,7 +1169,7 @@ def _handle_disaster(
                 )
             else:
                 print("Stage 3 failed and Stage 1 is infeasible; keeping original route.")
-                return 0, 0.0
+                return 0, 0.0, None
         else:
             routes_before_stage3 = {
                 route_id: _clone_route(state.route)
@@ -1154,6 +1187,7 @@ def _handle_disaster(
                 if stage1_combined_route.is_feasible():
                     print("Using Stage 1 feasible route as contingency after Stage 3 failure.")
                     accepted_stage = "Stage 3 fallback"
+                    accepted_stage_key = "stage1"
                     new_route = Route(
                         depot=original_route.depot,
                         customers=stage1_customers,
@@ -1176,10 +1210,10 @@ def _handle_disaster(
                         wasted_travel_time=wasted_travel_time,
                         wasted_travel_distance=wasted_travel_distance,
                     )
-                    return 1, wasted_travel_distance
+                    return 1, wasted_travel_distance, "stage2"
                 else:
                     print("Stage 3 failed and Fallbacks are infeasible; keeping original route.")
-                    return 0, 0.0
+                    return 0, 0.0, None
             else:
                 donor_pending = [c for c in pending_customers if c.index != target_node]
                 
@@ -1239,6 +1273,7 @@ def _handle_disaster(
                     if stage1_combined_route.is_feasible():
                         print("Using Stage 1 feasible route as fallback.")
                         accepted_stage = "Stage 3 fallback"
+                        accepted_stage_key = "stage1"
                         new_route = Route(
                             depot=original_route.depot,
                             customers=stage1_customers,
@@ -1246,7 +1281,7 @@ def _handle_disaster(
                             wasted_distance=historical_wasted_distance,
                         )
                     else:
-                        return 0, 0.0
+                        return 0, 0.0, None
                 else:
                     _commit_stage3_updates(
                         winner_state=rescued_state,
@@ -1326,7 +1361,7 @@ def _handle_disaster(
                         else:
                             print(f"Stage 3 Rescue Operation: FAILED. No vehicle in the network has the capacity/time to save customer {orphan_id}.")
 
-                    return 1, wasted_travel_distance
+                    return 1, wasted_travel_distance, "stage3"
 
     # Build reroute snapshot for output JSON (executed path + future path).
     reroute_vehicle_payload = build_reroute_vehicle_payload(
@@ -1405,5 +1440,6 @@ def _handle_disaster(
         stop_index_offset=executed_count,
     )
 
-    return 1, wasted_travel_distance
+    final_stage_key = accepted_stage_key if accepted_stage_key is not None else "stage1"
+    return 1, wasted_travel_distance, final_stage_key
 
