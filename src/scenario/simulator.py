@@ -1097,6 +1097,51 @@ def _handle_disaster(
         reroute_degradation_threshold=reroute_degradation_threshold,
         blocked_edges=blocked_edges,
     )
+
+    def _stage1_fallback_is_valid() -> bool:
+        uses_broken_edge = _path_uses_blocked_edge(
+            event_start_node,
+            stage1_customers,
+            original_route.depot,
+            blocked_edges,
+        )
+        is_feasible = stage1_combined_route.is_feasible()
+        if not is_feasible or uses_broken_edge:
+            print(
+                "Stage 1 fallback rejected "
+                f"(feasible={is_feasible}, uses_broken_edge={uses_broken_edge})."
+            )
+            return False
+        return True
+
+    def _stage2_fallback_is_valid(
+        routes_by_id: dict[int, dict[str, object]],
+    ) -> bool:
+        for route_id, data in routes_by_id.items():
+            combined_route: Route = data["combined_route"]
+            if not combined_route.is_feasible():
+                print(
+                    "Stage 2 fallback rejected "
+                    f"(route={route_id}, feasible=False)."
+                )
+                return False
+
+            item = data["item"]
+            future_route: Route = data["future_route"]
+            uses_broken_edge = _path_uses_blocked_edge(
+                item["event_start_node"],
+                future_route.customers,
+                combined_route.depot,
+                blocked_edges,
+            )
+            if uses_broken_edge:
+                print(
+                    "Stage 2 fallback rejected "
+                    f"(route={route_id}, uses_broken_edge=True)."
+                )
+                return False
+        return True
+
     if stage1_accepted:
         accepted_stage = "Stage 1"
         accepted_stage_key = "stage1"
@@ -1157,7 +1202,7 @@ def _handle_disaster(
                 "Stage 3 aborted: could not resolve target_node from blocked edge; "
                 "falling back to Stage 1 contingency."
             )
-            if stage1_combined_route.is_feasible():
+            if _stage1_fallback_is_valid():
                 print("Using Stage 1 feasible route as contingency after Stage 3 failure.")
                 accepted_stage = "Stage 3 fallback"
                 accepted_stage_key = "stage1"
@@ -1184,7 +1229,7 @@ def _handle_disaster(
             )
 
             if rescued_state is None:
-                if stage1_combined_route.is_feasible():
+                if _stage1_fallback_is_valid():
                     print("Using Stage 1 feasible route as contingency after Stage 3 failure.")
                     accepted_stage = "Stage 3 fallback"
                     accepted_stage_key = "stage1"
@@ -1194,8 +1239,8 @@ def _handle_disaster(
                         wasted_duration=historical_wasted_duration,
                         wasted_distance=historical_wasted_distance,
                     )
-                    
-                elif stage2_fallback is not None:
+
+                elif stage2_fallback is not None and _stage2_fallback_is_valid(stage2_fallback):
                     print("Using Stage 2 feasible cluster as contingency after Stage 3 failure.")
                     _commit_stage2_updates(
                         new_routes_by_id=stage2_fallback,
@@ -1270,7 +1315,7 @@ def _handle_disaster(
                 # If the donor route still uses the broken edge after cleanup, we consider Stage 3 a failure for this iteration, as it indicates that the fixed_next_customer is effectively trapped and cannot be served without crossing the broken edge. In a real-world scenario, this might trigger an alert for manual intervention or a more drastic contingency plan.
                 if donor_uses_broken:
                     print("Stage 3 aborted: unresolvable broken edge on donor route (likely fixed_next_customer is trapped).")
-                    if stage1_combined_route.is_feasible():
+                    if _stage1_fallback_is_valid():
                         print("Using Stage 1 feasible route as fallback.")
                         accepted_stage = "Stage 3 fallback"
                         accepted_stage_key = "stage1"
