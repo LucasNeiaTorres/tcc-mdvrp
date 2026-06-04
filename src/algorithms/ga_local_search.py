@@ -163,7 +163,7 @@ def local_search(
     is_stage_2:
         Enable VND phase control (INTER -> INTRA) for Stage 2 cluster reopt.
     apply_frozen_prefix:
-        Protect the first customer of each real route (dummy route exempt).
+        Protect the first customer of each route.
 
     Returns
     -------
@@ -171,11 +171,8 @@ def local_search(
     """
     # Work on copies so callers keep the originals until committed.
     normalized_routes: List[List[Customer]] = []
-    for idx, route in enumerate(routes):
-        is_last = idx == len(routes) - 1
+    for route in routes:
         if not route:
-            if is_stage_2 and apply_frozen_prefix and is_last:
-                normalized_routes.append([])
             continue
         if isinstance(route, Route):
             normalized_routes.append(list(route.customers))
@@ -215,8 +212,7 @@ def local_search(
                 for u_idx in range(len(ru)):
                     if improved:
                         break
-                    is_dummy_route = (ru_idx == len(routes) - 1)
-                    if apply_frozen_prefix and u_idx == 0 and not is_dummy_route:
+                    if apply_frozen_prefix and u_idx == 0:
                         continue
                     u = ru[u_idx]
                     x = ru[u_idx + 1] if u_idx + 1 < len(ru) else depot
@@ -414,6 +410,9 @@ def local_search(
                         # Two adjacent same-route cases need corrected gain formulas because
                         # boundary nodes coincide with x or u, breaking the general 8-term formula.
                         if isinstance(x, Customer) and not (ru_idx == rv_idx and v_idx == u_idx + 1):
+                            if apply_frozen_prefix and v_idx == 0:
+                                continue
+                            
                             u_prev = _prev(ru, u_idx)
                             x_next = _next(ru, u_idx + 1)
                             v_prev = _prev(rv, v_idx)
@@ -488,6 +487,9 @@ def local_search(
                         # with the other pair, breaking the general gain formula.
                         _m6_overlap = ru_idx == rv_idx and abs(v_idx - u_idx) <= 1
                         if isinstance(x, Customer) and isinstance(y, Customer) and not _m6_overlap:
+                            if apply_frozen_prefix and v_idx == 0:
+                                continue
+
                             u_prev = _prev(ru, u_idx)
                             x_next = _next(ru, u_idx + 1)
                             v_prev = _prev(rv, v_idx)
@@ -577,6 +579,9 @@ def local_search(
                         # the edge-delta formula is symmetric so scanning (v,u) after (u,v)
                         # reports the same positive gain and reverses the move endlessly.
                         if ru_idx < rv_idx:
+                            if apply_frozen_prefix:
+                                continue
+                            
                             prefix_u = ru[: u_idx + 1]
                             suffix_u = ru[u_idx + 1:]
                             prefix_v = rv[: v_idx + 1]

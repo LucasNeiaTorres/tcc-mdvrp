@@ -358,8 +358,9 @@ def reoptimize_intra_cluster(
         print("Stage 2 rejected: no routes available to absorb unassigned customers.")
         return None, None
 
-    # Dummy route is always the last entry to bypass the frozen prefix.
-    cluster_routes.append(list(unassigned_customers))
+    # Insert unassigned customers into the first route if possible (VND will handle them).
+    if unassigned_customers and cluster_routes:
+        cluster_routes[0].extend(unassigned_customers)
 
     unique_customers: dict[int, Customer] = {}
     for route in cluster_routes:
@@ -400,7 +401,7 @@ def reoptimize_intra_cluster(
     if leftover_routes:
         leftover_ids = sorted({c.index for route in leftover_routes for c in route})
         print(
-            "Stage 2 rejected: dummy route not emptied or prefix mismatch. "
+            "Stage 2 rejected: unmatched optimized routes or prefix mismatch. "
             f"leftover_customers={leftover_ids}"
         )
         return None, None
