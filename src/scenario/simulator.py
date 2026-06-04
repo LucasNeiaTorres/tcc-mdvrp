@@ -131,7 +131,7 @@ def reoptimize_intra_route_stage1(
     executed_customers: list[Customer],
     historical_wasted_duration: float,
     historical_wasted_distance: float,
-    original_route_duration: float,
+    original_route_cost: float,
     reroute_degradation_threshold: float,
     blocked_edges: set[tuple[int, int]],
 ) -> tuple[list[Customer], Route, bool]:
@@ -152,7 +152,8 @@ def reoptimize_intra_route_stage1(
         wasted_duration=historical_wasted_duration,
         wasted_distance=historical_wasted_distance,
     )
-    stage1_duration_limit = original_route_duration * reroute_degradation_threshold
+    stage1_cost = stage1_combined_route.total_distance()
+    stage1_cost_limit = original_route_cost * reroute_degradation_threshold
     stage1_uses_blocked_edge = _path_uses_blocked_edge(
         event_start_node,
         stage1_customers,
@@ -161,28 +162,33 @@ def reoptimize_intra_route_stage1(
     )
     print(
         f"Stage 1 result route: customers={[c.index for c in stage1_customers]}, "
+        f"cost={stage1_cost:.2f}, "
+        f"cost_limit={stage1_cost_limit:.2f}, "
         f"duration={stage1_combined_route.total_duration():.2f}, "
-        f"limit={stage1_duration_limit:.2f}, "
         f"fixed_next_customer={fixed_next_customer.index if fixed_next_customer else None}, "
         f"uses_broken_edge={stage1_uses_blocked_edge}"
     )
 
     accepted = (
         stage1_combined_route.is_feasible()
-        and stage1_combined_route.total_duration() <= stage1_duration_limit
+        and stage1_cost <= stage1_cost_limit
         and not stage1_uses_blocked_edge
     )
     if accepted:
         print(
             "Stage 1 accepted "
-            f"(duration={stage1_combined_route.total_duration():.2f}, "
-            f"limit={stage1_duration_limit:.2f})."
+            f"(cost={stage1_cost:.2f}, "
+            f"cost_limit={stage1_cost_limit:.2f}, "
+            f"duration={stage1_combined_route.total_duration():.2f}, "
+            f"hard_duration_limit={depot.max_duration:.2f})."
         )
     else:
         print(
             "Stage 1 rejected "
-            f"(duration={stage1_combined_route.total_duration():.2f}, "
-            f"limit={stage1_duration_limit:.2f}, "
+            f"(cost={stage1_cost:.2f}, "
+            f"cost_limit={stage1_cost_limit:.2f}, "
+            f"duration={stage1_combined_route.total_duration():.2f}, "
+            f"hard_duration_limit={depot.max_duration:.2f}, "
             f"feasible={stage1_combined_route.is_feasible()}, "
             f"uses_broken_edge={stage1_uses_blocked_edge})."
         )
@@ -218,43 +224,43 @@ def reoptimize_intra_cluster(
     if not cluster_states:
         return None, None
 
-    def _route_duration_with_return(
+    def _route_cost_with_return(
         route: Route,
         current_node_local: Depot | Customer,
-        wasted_duration_override: float | None = None,
+        wasted_distance_override: float | None = None,
     ) -> float:
         if route.customers:
-            if wasted_duration_override is None:
-                return route.total_duration()
+            if wasted_distance_override is None:
+                return route.total_distance()
             temp_route = Route(
                 depot=route.depot,
                 customers=list(route.customers),
-                wasted_duration=wasted_duration_override,
-                wasted_distance=route.wasted_distance,
+                wasted_duration=route.wasted_duration,
+                wasted_distance=wasted_distance_override,
             )
-            return temp_route.total_duration()
+            return temp_route.total_distance()
 
         base_wasted = (
-            wasted_duration_override
-            if wasted_duration_override is not None
-            else route.wasted_duration
+            wasted_distance_override
+            if wasted_distance_override is not None
+            else route.wasted_distance
         )
         if current_node_local.index == route.depot.index:
             return base_wasted
         return base_wasted + travel_time(current_node_local, route.depot)
 
-    # Baseline duration for the whole cluster (used by the gatekeeper).
-    original_cluster_duration = 0.0
+    # Baseline cost for the whole cluster (used by the gatekeeper).
+    original_cluster_cost = 0.0
     for state in cluster_states:
         current_node_local = _resolve_current_node(state)
         if state.route_id == affected_route_id:
-            original_cluster_duration += _route_duration_with_return(
+            original_cluster_cost += _route_cost_with_return(
                 state.route,
                 current_node_local,
-                wasted_duration_override=state.route.wasted_duration + wasted_travel_time,
+                wasted_distance_override=state.route.wasted_distance + wasted_travel_distance,
             )
         else:
-            original_cluster_duration += _route_duration_with_return(
+            original_cluster_cost += _route_cost_with_return(
                 state.route,
                 current_node_local,
             )
@@ -406,12 +412,12 @@ def reoptimize_intra_cluster(
             return None, None
 
     new_routes_by_id: dict[int, dict[str, object]] = {}
-    new_cluster_duration = 0.0
+    new_cluster_cost = 0.0
 
     for state in cluster_states:
         item = route_items_by_id.get(state.route_id)
         if item is None:
-            new_cluster_duration += _route_duration_with_return(
+            new_cluster_cost += _route_cost_with_return(
                 state.route,
                 _resolve_current_node(state),
             )
@@ -430,12 +436,12 @@ def reoptimize_intra_cluster(
             wasted_distance=item["wasted_distance"],
         )
         if combined_route.customers:
-            new_cluster_duration += combined_route.total_duration()
+            new_cluster_cost += combined_route.total_distance()
         else:
-            new_cluster_duration += _route_duration_with_return(
+            new_cluster_cost += _route_cost_with_return(
                 combined_route,
                 item["current_node"],
-                wasted_duration_override=item["wasted_duration"],
+                wasted_distance_override=item["wasted_distance"],
             )
         new_routes_by_id[state.route_id] = {
             "combined_route": combined_route,
@@ -448,7 +454,7 @@ def reoptimize_intra_cluster(
             "item": item,
         }
 
-    # Gatekeeper: feasibility, broken edge avoidance, and cluster duration threshold.
+    # Gatekeeper: feasibility, broken edge avoidance, and cluster cost threshold.
     all_routes_feasible = True
     for route_id, data in new_routes_by_id.items():
         if not data["combined_route"].is_feasible():
@@ -468,7 +474,7 @@ def reoptimize_intra_cluster(
             break
 
     is_within_threshold = (
-        new_cluster_duration <= original_cluster_duration * cluster_degradation_threshold
+        new_cluster_cost <= original_cluster_cost * cluster_degradation_threshold
     )
 
     affected_data = new_routes_by_id.get(affected_route_id)
@@ -481,16 +487,20 @@ def reoptimize_intra_cluster(
         return None, None
 
     if not is_within_threshold:
-        print(f"Stage 2 rejected by threshold but saved as FALLBACK (duration={new_cluster_duration:.2f}, limit={original_cluster_duration * cluster_degradation_threshold:.2f}).")
+        print(
+            "Stage 2 rejected by threshold but saved as FALLBACK "
+            f"(cost={new_cluster_cost:.2f}, "
+            f"limit={original_cluster_cost * cluster_degradation_threshold:.2f})."
+        )
         return None, new_routes_by_id
 
     delta_pct = 0.0
-    if original_cluster_duration > 0:
-        delta_pct = ((new_cluster_duration - original_cluster_duration) / original_cluster_duration) * 100.0
+    if original_cluster_cost > 0:
+        delta_pct = ((new_cluster_cost - original_cluster_cost) / original_cluster_cost) * 100.0
     print(
         "Stage 2 cluster cost change "
-        f"(old={original_cluster_duration:.2f}, "
-        f"new={new_cluster_duration:.2f}, "
+        f"(old={original_cluster_cost:.2f}, "
+        f"new={new_cluster_cost:.2f}, "
         f"delta={delta_pct:+.2f}%)."
     )
 
@@ -804,7 +814,7 @@ def run_simulation(
     algorithm : MDVRPAlgorithm
         Algorithm to use for rerouting.
     cluster_degradation_threshold : float
-        Stage-2 cluster acceptance limit for total duration.
+        Stage-2 cluster acceptance limit for total cost.
         
     Returns
     -------
@@ -1023,7 +1033,7 @@ def _handle_disaster(
 
     affected_vehicle_state = vehicle_states[affected_route]
     original_route = affected_vehicle_state.route
-    original_route_duration = original_route.total_duration()
+    original_route_cost = original_route.total_distance()
 
     # Resolve vehicle position and check if traversing the broken edge now.
     current_node = (
@@ -1093,7 +1103,7 @@ def _handle_disaster(
         executed_customers=executed_customers,
         historical_wasted_duration=historical_wasted_duration,
         historical_wasted_distance=historical_wasted_distance,
-        original_route_duration=original_route_duration,
+        original_route_cost=original_route_cost,
         reroute_degradation_threshold=reroute_degradation_threshold,
         blocked_edges=blocked_edges,
     )
