@@ -10,5 +10,7 @@ ga:
   mutation_prob: 0.15 # Prins (2004): pm up to 0.20; higher rate is fine with LS mutation
 
 simulation:
-  reroute_degradation_threshold: 1.20  # Stage-1 acceptance limit for reroute duration (e.g., 1.20 = +20%)
-  cluster_degradation_threshold: 1.05  # Stage-2 cluster acceptance limit (e.g., 1.05 = +5%)
+  reroute_degradation_threshold: 1.20  # Stage-1 acceptance limit for reroute cost (e.g., 1.10 = +10%)
+  cluster_degradation_threshold: 1.10  # Stage-2 cluster acceptance limit for cluster cost (e.g., 1.05 = +5%)
+  penalty_overcapacity_per_unit: 100000.0   # Soft-constraint penalty (capacity excess units)
+  penalty_overtime_per_minute: 50000.0     # Soft-constraint penalty (shift overtime minutes)
