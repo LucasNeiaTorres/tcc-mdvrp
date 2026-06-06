@@ -1481,10 +1481,10 @@ def run_simulation(
         )
         duration_hero_route = max(
             duration_violations,
-            key=lambda item: (item["customers_count"], item["excess"], -item["route_id"]),
+            key=lambda item: (item["excess"], item["customers_count"], -item["route_id"]),
         )
         print(
-            "  -> Hero Route        : "
+            "  -> Critical Route    : "
             f"route={duration_hero_route['route_id']}, "
             f"depot={duration_hero_route['depot_index']}, "
             f"customers={duration_hero_route['customers_count']}"
@@ -1500,10 +1500,10 @@ def run_simulation(
         )
         capacity_hero_route = max(
             capacity_violations,
-            key=lambda item: (item["customers_count"], item["excess"], -item["route_id"]),
+            key=lambda item: (item["excess"], item["customers_count"], -item["route_id"]),
         )
         print(
-            "  -> Hero Route        : "
+            "  -> Critical Route    : "
             f"route={capacity_hero_route['route_id']}, "
             f"depot={capacity_hero_route['depot_index']}, "
             f"customers={capacity_hero_route['customers_count']}"
