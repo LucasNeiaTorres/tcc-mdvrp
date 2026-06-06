@@ -4,10 +4,11 @@ from pathlib import Path
 
 from algorithms.ccbc_ga import CCBCGAAlgorithm
 from utils.config import load_config
-from utils.converter import build_customers, build_depots, load_instance
+from utils.converter import load_instance
 from utils.data_loader import read_cordeau_data_file, read_cordeau_solution_file, read_failures_file
+from utils.reporting import print_solution_summary, print_run_summary, print_simulation_validation
 from utils.results_io import save_clustering_result, save_routing_result
-from utils.visualizer import visualize_instance, visualize_comparison, visualize_solution, visualize_ga_convergence
+from utils.visualizer import visualize_comparison, visualize_solution, visualize_ga_convergence
 from scenario.simulator import SIMULATION_LOG_DIR, run_simulation
 from tools.validate_simulation_log import validate_simulation_log
 
@@ -17,7 +18,7 @@ def main() -> int:
     default_failures_file = None
 
     parser = argparse.ArgumentParser(description="Run and visualize the MDVRP solver on one instance.")
-    parser.add_argument("--instance", default="p04", metavar="NAME", help="Instance name (default: p01).")
+    parser.add_argument("--instance", default="p20", metavar="NAME", help="Instance name (default: p01).")
     parser.add_argument(
         "--failures-file",
         default=default_failures_file,
@@ -93,19 +94,18 @@ def main() -> int:
         solution=solution,
     )
 
-    print(f"Reference   : {reference_solution.objective:.2f}" if reference_solution else "Reference   : N/A")
-    print(f"{algorithm}")
-    print(
-        f"  cost: {solution.total_cost():.2f} "
-        f"feasible: {solution.fully_feasible()} "
-        f"(routes: {solution.is_feasible()}, fleet: {solution.fleet_is_feasible()})"
+    print_solution_summary(solution)
+
+    print_run_summary(
+        solution=solution,
+        elapsed=elapsed,
+        ga_history=algorithm.last_ga_history,
+        clone_delta=cfg.ga.clone_delta,
+        reference_cost=reference_solution.objective if reference_solution else None,
+        algorithm_repr=str(algorithm),
+        clustering_file=str(clustering_file),
+        routing_file=str(routing_file),
     )
-    print(f"  time : {elapsed:.2f}s")
-    for h in algorithm.last_ga_history:
-        early = f", early stop at gen {len(h.best)}" if h.stopped_early else ""
-        print(f"  depot {h.depot_index}: clones removed = {h.clones_removed} (delta={cfg.ga.clone_delta}{early})")
-    print(f"Saved clusters : {clustering_file}")
-    print(f"Saved routes   : {routing_file}")
 
     # Visualize
     if reference_solution is not None:
@@ -155,25 +155,10 @@ def main() -> int:
         blocked_edge_violations = validation_result["blocked_edge_violations"]
         unserved_customers = validation_result["unserved_customers"]
 
-        if blocked_edge_violations:
-            route_id, node_a, node_b, depart_time, arrival_time, block_time = blocked_edge_violations[0]
-            print(
-                f"Validation failed: {len(blocked_edge_violations)} blocked-edge violation(s) found in {log_path}\n"
-                f"  first violation: route {route_id} used edge {node_a} <-> {node_b} "
-                f"between t={depart_time:.3f}min and t={arrival_time:.3f}min, "
-                f"but it was blocked at t={block_time:.3f}min"
-            )
-        if unserved_customers:
-            print(
-                f"Validation failed: {len(unserved_customers)} unserved customer(s) found in {log_path}\n"
-                f"  unserved customers: {unserved_customers}"
-            )
+        print_simulation_validation(validation_result, log_path)
 
         if blocked_edge_violations or unserved_customers:
             return 1
-
-        print(f"Validation passed: no blocked-edge violations found in {log_path}")
-        print(f"Validation passed: all customers were served in {log_path}")
     else:
         if args.no_simulate:
             print("Simulation skipped (--no-simulate).")
