@@ -53,6 +53,26 @@ def _path_uses_blocked_edge(
     return _normalize_edge(prev_idx, end_node.index) in blocked_edges
 
 
+def is_feasible(
+    candidate_route: Route,
+    original_route: Route | None = None,
+    *,
+    start_node: Depot | Customer | None = None,
+    blocked_edges: set[tuple[int, int]] | None = None,
+) -> bool:
+    """Validate route with blocked-edge hard rule and optional historical tolerance."""
+    if start_node is not None and blocked_edges is not None:
+        if _path_uses_blocked_edge(
+            start_node,
+            candidate_route.customers,
+            candidate_route.depot,
+            blocked_edges,
+        ):
+            return False
+
+    return candidate_route.is_feasible(original_route=original_route)
+
+
 def _resolve_current_node(state: VehicleState) -> Depot | Customer:
     return (
         state.route.depot
@@ -141,6 +161,47 @@ def _sync_vehicle_state_route(state: VehicleState, route: Route) -> None:
     )
 
 
+def _register_stage3_unserved_reason(
+    customer_id: int,
+    diagnostics: dict[str, int] | None,
+    *,
+    unserved_no_active_route_ids: set[int],
+    unserved_no_route_without_broken_edge_ids: set[int],
+    unserved_mixed_reason_ids: set[int],
+) -> None:
+    """Classify Stage-3 unserved reason from diagnostics and store exclusive buckets."""
+    active_other_routes = int((diagnostics or {}).get("active_other_routes_count", 0))
+    eligible_other_routes = int((diagnostics or {}).get("eligible_other_routes_count", 0))
+    routes_with_open_insertion = int((diagnostics or {}).get("routes_with_open_insertion_count", 0))
+
+    no_active_route_besides_current = active_other_routes == 0
+    no_route_without_broken_edge = routes_with_open_insertion == 0
+    has_mixed_context = (
+        active_other_routes > 0
+        and no_route_without_broken_edge
+        and eligible_other_routes < active_other_routes
+    )
+
+    # Priority rule: if there are no active routes besides the blocked one,
+    # classify only as "no active route" (not mixed).
+    if no_active_route_besides_current:
+        unserved_no_active_route_ids.add(customer_id)
+        unserved_no_route_without_broken_edge_ids.discard(customer_id)
+        unserved_mixed_reason_ids.discard(customer_id)
+        return
+
+    if has_mixed_context:
+        unserved_mixed_reason_ids.add(customer_id)
+        unserved_no_active_route_ids.discard(customer_id)
+        unserved_no_route_without_broken_edge_ids.discard(customer_id)
+        return
+
+    if no_route_without_broken_edge:
+        unserved_no_route_without_broken_edge_ids.add(customer_id)
+        unserved_no_active_route_ids.discard(customer_id)
+        unserved_mixed_reason_ids.discard(customer_id)
+
+
 def _commit_stage3_winner_only(
     *,
     winner_state: VehicleState,
@@ -197,6 +258,12 @@ def _run_cascade_drop_protocol(
     event_queue: EventQueue,
     current_time: float,
     forced_unserved_customer_ids: set[int],
+    target_unserved_diagnostics: dict[str, int] | None,
+    unserved_no_active_route_ids: set[int],
+    unserved_no_route_without_broken_edge_ids: set[int],
+    unserved_mixed_reason_ids: set[int],
+    penalty_overcapacity_per_unit: float,
+    penalty_overtime_per_minute: float,
 ) -> tuple[list[Customer], int, int, list[int]]:
     """
     Execute forward-scan cascade protocol after Stage-3 failure on target_node.
@@ -234,6 +301,13 @@ def _run_cascade_drop_protocol(
             if customer.index == target_node:
                 future_customers.pop(idx)
                 forced_unserved_customer_ids.add(customer.index)
+                _register_stage3_unserved_reason(
+                    customer.index,
+                    target_unserved_diagnostics,
+                    unserved_no_active_route_ids=unserved_no_active_route_ids,
+                    unserved_no_route_without_broken_edge_ids=unserved_no_route_without_broken_edge_ids,
+                    unserved_mixed_reason_ids=unserved_mixed_reason_ids,
+                )
                 dropped_count += 1
                 target_dropped = True
                 print(
@@ -261,11 +335,15 @@ def _run_cascade_drop_protocol(
 
         # Make target discoverable by Stage 3 even after removal from donor list.
         affected_state.customers_by_index[blocked_customer.index] = blocked_customer
+        cascade_target_diagnostics: dict[str, int] = {}
         winner_state = stage3_global_cross_depot_repair(
             target_node=blocked_customer.index,
             vehicle_states=vehicle_states,
             distance_matrix=stage3_distance_matrix,
             blocked_vehicle_id=affected_route_id,
+            penalty_overcapacity_per_unit=penalty_overcapacity_per_unit,
+            penalty_overtime_per_minute=penalty_overtime_per_minute,
+            diagnostics_out=cascade_target_diagnostics,
         )
         affected_state.customers_by_index.pop(blocked_customer.index, None)
 
@@ -287,6 +365,13 @@ def _run_cascade_drop_protocol(
             continue
 
         forced_unserved_customer_ids.add(blocked_customer.index)
+        _register_stage3_unserved_reason(
+            blocked_customer.index,
+            cascade_target_diagnostics,
+            unserved_no_active_route_ids=unserved_no_active_route_ids,
+            unserved_no_route_without_broken_edge_ids=unserved_no_route_without_broken_edge_ids,
+            unserved_mixed_reason_ids=unserved_mixed_reason_ids,
+        )
         dropped_count += 1
         print(
             "Stage 3 Cascade: no feasible rescue; "
@@ -307,6 +392,7 @@ def reoptimize_intra_route_stage1(
     historical_wasted_duration: float,
     historical_wasted_distance: float,
     original_route_cost: float,
+    original_route: Route,
     reroute_degradation_threshold: float,
     blocked_edges: set[tuple[int, int]],
 ) -> tuple[list[Customer], Route, bool]:
@@ -335,6 +421,12 @@ def reoptimize_intra_route_stage1(
         depot,
         blocked_edges,
     )
+    stage1_is_feasible = is_feasible(
+        stage1_combined_route,
+        original_route=original_route,
+        start_node=event_start_node,
+        blocked_edges=blocked_edges,
+    )
     print(
         f"Stage 1 result route: customers={[c.index for c in stage1_customers]}, "
         f"cost={stage1_cost:.2f}, "
@@ -344,11 +436,7 @@ def reoptimize_intra_route_stage1(
         f"uses_broken_edge={stage1_uses_blocked_edge}"
     )
 
-    accepted = (
-        stage1_combined_route.is_feasible()
-        and stage1_cost <= stage1_cost_limit
-        and not stage1_uses_blocked_edge
-    )
+    accepted = stage1_is_feasible and stage1_cost <= stage1_cost_limit
     if accepted:
         print(
             "Stage 1 accepted "
@@ -364,7 +452,7 @@ def reoptimize_intra_route_stage1(
             f"cost_limit={stage1_cost_limit:.2f}, "
             f"duration={stage1_combined_route.total_duration():.2f}, "
             f"hard_duration_limit={depot.max_duration:.2f}, "
-            f"feasible={stage1_combined_route.is_feasible()}, "
+            f"feasible={stage1_is_feasible}, "
             f"uses_broken_edge={stage1_uses_blocked_edge})."
         )
 
@@ -424,6 +512,24 @@ def reoptimize_intra_cluster(
             return base_wasted
         return base_wasted + travel_time(current_node_local, route.depot)
 
+    def _executed_prefix_duration(
+        depot_local: Depot,
+        executed: list[Customer],
+        wasted_duration_local: float,
+    ) -> float:
+        """Duration already consumed before the pending optimization suffix."""
+        if not executed:
+            return wasted_duration_local
+
+        travel = 0.0
+        prev_node: Depot | Customer = depot_local
+        for customer in executed:
+            travel += travel_time(prev_node, customer)
+            prev_node = customer
+
+        service = sum(customer.service_time for customer in executed)
+        return wasted_duration_local + travel + service
+
     # Baseline cost for the whole cluster (used by the gatekeeper).
     original_cluster_cost = 0.0
     for state in cluster_states:
@@ -443,6 +549,8 @@ def reoptimize_intra_cluster(
     # Prepare per-route pending sets and a dummy route to drain orphan customers.
     unassigned_customers: list[Customer] = []
     cluster_routes: list[list[Customer]] = []
+    executed_capacity_by_route: list[float] = []
+    executed_duration_by_route: list[float] = []
     route_items: list[dict[str, object]] = []
     route_items_by_id: dict[int, dict[str, object]] = {}
     empty_route_items: list[dict[str, object]] = []
@@ -508,6 +616,14 @@ def reoptimize_intra_cluster(
             route_items.append(route_item)
             route_items_by_id[state.route_id] = route_item
             cluster_routes.append(route_customers)
+            executed_capacity_by_route.append(sum(customer.demand for customer in executed_customers))
+            executed_duration_by_route.append(
+                _executed_prefix_duration(
+                    state.route.depot,
+                    executed_customers,
+                    historical_wasted_duration,
+                )
+            )
         elif state.route_id == affected_route_id:
             route_item = {
                 "route_id": state.route_id,
@@ -555,6 +671,8 @@ def reoptimize_intra_cluster(
             algorithm._dist,
             is_stage_2=True,
             apply_frozen_prefix=True,
+            executed_capacity_by_route=executed_capacity_by_route,
+            executed_duration_by_route=executed_duration_by_route,
         )
 
     prefix_to_item = {
@@ -633,19 +751,21 @@ def reoptimize_intra_cluster(
     # Gatekeeper: feasibility, broken edge avoidance, and cluster cost threshold.
     all_routes_feasible = True
     for route_id, data in new_routes_by_id.items():
-        if not data["combined_route"].is_feasible():
-            all_routes_feasible = False
-            break
-        
         item = data["item"]
-        uses_broken = _path_uses_blocked_edge(
-            item["event_start_node"],
-            data["future_route"].customers,
-            data["combined_route"].depot,
-            blocked_edges,
-        )
-        if uses_broken:
-            print(f"Stage 2 rejected: route {route_id} attempts to cross a blocked edge.")
+        if not is_feasible(
+            data["combined_route"],
+            original_route=item["state"].route,
+            start_node=item["event_start_node"],
+            blocked_edges=blocked_edges,
+        ):
+            uses_broken = _path_uses_blocked_edge(
+                item["event_start_node"],
+                data["future_route"].customers,
+                data["combined_route"].depot,
+                blocked_edges,
+            )
+            if uses_broken:
+                print(f"Stage 2 rejected: route {route_id} attempts to cross a blocked edge.")
             all_routes_feasible = False
             break
 
@@ -1072,6 +1192,9 @@ def run_simulation(
     current_time = 0.0
     blocked_edges: set[tuple[int, int]] = set()
     forced_unserved_customer_ids: set[int] = set()
+    unserved_no_active_route_ids: set[int] = set()
+    unserved_no_route_without_broken_edge_ids: set[int] = set()
+    unserved_mixed_reason_ids: set[int] = set()
 
     # Main simulation loop: process events in chronological order
     while not event_queue.is_empty():
@@ -1105,6 +1228,9 @@ def run_simulation(
                 reroute_degradation_threshold,
                 cluster_degradation_threshold,
                 forced_unserved_customer_ids,
+                unserved_no_active_route_ids,
+                unserved_no_route_without_broken_edge_ids,
+                unserved_mixed_reason_ids,
             )
             reroute_count += reroute_inc
             if reroute_inc > 0 and accepted_stage in reroute_by_stage:
@@ -1164,6 +1290,24 @@ def run_simulation(
         for customer_id in unserved_customers
         if customer_id not in forced_unserved_customer_ids
     )
+    unserved_due_no_active_route_besides_current = sorted(
+        customer_id
+        for customer_id in unserved_customers
+        if customer_id in unserved_no_active_route_ids
+        and customer_id not in unserved_mixed_reason_ids
+    )
+    unserved_due_no_route_without_broken_edge = sorted(
+        customer_id
+        for customer_id in unserved_customers
+        if customer_id in unserved_no_route_without_broken_edge_ids
+        and customer_id not in unserved_mixed_reason_ids
+        and customer_id not in unserved_no_active_route_ids
+    )
+    unserved_due_mixed_stage3_reason = sorted(
+        customer_id
+        for customer_id in unserved_customers
+        if customer_id in unserved_mixed_reason_ids
+    )
     unserved_rate_percent = (
         (len(unserved_customers) / len(expected_set)) * 100.0
         if expected_set
@@ -1177,23 +1321,95 @@ def run_simulation(
     routes_using_broken_set = find_routes_using_broken_edges(route_stop_events, blocked_edges)
     routes_using_broken = sorted(routes_using_broken_set)
 
+    capacity_violations: list[dict[str, object]] = []
+    duration_violations: list[dict[str, object]] = []
+    for route_id, route in enumerate(current_solution.routes, start=1):
+        route_customers_count = len(route.customers)
+
+        capacity_limit = float(route.depot.max_capacity)
+        route_demand = float(route.total_demand())
+        capacity_excess = max(0.0, route_demand - capacity_limit)
+        if capacity_excess > 0.0:
+            capacity_violations.append(
+                {
+                    "route_id": route_id,
+                    "depot_index": route.depot.index,
+                    "customers_count": route_customers_count,
+                    "total_demand": round(route_demand, 4),
+                    "limit": round(capacity_limit, 4),
+                    "excess": round(capacity_excess, 4),
+                    "excess_percent": round((capacity_excess / capacity_limit) * 100.0, 2)
+                    if capacity_limit > 0
+                    else 0.0,
+                }
+            )
+
+        duration_limit = float(route.depot.max_duration)
+        if duration_limit > 0.0:
+            route_duration = float(route.total_duration())
+            duration_excess = max(0.0, route_duration - duration_limit)
+            if duration_excess > 0.0:
+                duration_violations.append(
+                    {
+                        "route_id": route_id,
+                        "depot_index": route.depot.index,
+                        "customers_count": route_customers_count,
+                        "total_duration": round(route_duration, 4),
+                        "limit": round(duration_limit, 4),
+                        "excess": round(duration_excess, 4),
+                        "excess_percent": round((duration_excess / duration_limit) * 100.0, 2),
+                    }
+                )
+
+    capacity_feasible = len(capacity_violations) == 0
+    duration_feasible = len(duration_violations) == 0
+    broken_edge_feasible = len(routes_using_broken) == 0
+
+    capacity_forced_customers = sum(int(item["customers_count"]) for item in capacity_violations)
+    capacity_total_excess = sum(float(item["excess"]) for item in capacity_violations)
+    capacity_total_limit = sum(float(item["limit"]) for item in capacity_violations)
+    capacity_excess_vs_limit_pct = (
+        (capacity_total_excess / capacity_total_limit) * 100.0
+        if capacity_total_limit > 0
+        else 0.0
+    )
+
+    duration_forced_customers = sum(int(item["customers_count"]) for item in duration_violations)
+    duration_total_excess = sum(float(item["excess"]) for item in duration_violations)
+    duration_total_limit = sum(float(item["limit"]) for item in duration_violations)
+    duration_excess_vs_limit_pct = (
+        (duration_total_excess / duration_total_limit) * 100.0
+        if duration_total_limit > 0
+        else 0.0
+    )
+
     routes_feasible_now = current_solution.is_feasible()
     fleet_feasible_now = current_solution.fleet_is_feasible()
     fully_feasible_now = current_solution.fully_feasible()
-    feasible_considering_broken = routes_feasible_now and len(routes_using_broken) == 0
+    feasible_considering_broken = routes_feasible_now and broken_edge_feasible
+    feasible_soft_constraints = capacity_feasible and duration_feasible
+    feasible_hard_constraints = fleet_feasible_now and broken_edge_feasible
+    if feasible_hard_constraints and len(unserved_customers) == 0 and feasible_soft_constraints:
+        operation_verdict = "SUCCESS"
+    elif feasible_hard_constraints and len(unserved_customers) == 0:
+        operation_verdict = "SUCCESS WITH CONTINGENCY"
+    elif feasible_hard_constraints:
+        operation_verdict = "PARTIAL SUCCESS"
+    else:
+        operation_verdict = "FAILURE"
 
     # Output final simulation metrics
     print("--- Simulation summary ---")
     print(f"Original solution cost  : {original_solution_cost:.2f}")
     print(
-        "Post-reroute (sem U-turn embutido): "
+        "Post-reroute (without embedded U-turns): "
         f"{post_reroute_cost_without_wasted:.2f} "
         f"(change: {post_reroute_delta_pct:+.2f}% | {post_reroute_delta:+.2f})"
     )
     print(f"Wasted (U-turns)        : {total_wasted_distance:.2f}")
     print(
         f"Realized total cost     : {realized_cost:.2f} "
-        f"(U-turns ja embutidos, total impact: "
+        f"(with embedded U-turns, total impact: "
         f"{total_cost_impact_pct:+.2f}% | {total_cost_impact:+.2f})"
     )
     print(f"Reroute operations      : {reroute_count}")
@@ -1213,21 +1429,89 @@ def run_simulation(
             f"{unserved_rate_formatted} | {unserved_customers}"
         )
         print(
-            "Unserved (Stage3 fb)    : "
+            "Unserved (Stage3 fallback): "
             f"{unserved_from_stage3_fallback if unserved_from_stage3_fallback else 'none'}"
         )
         print(
             "Unserved (other)        : "
             f"{unserved_not_from_stage3_fallback if unserved_not_from_stage3_fallback else 'none'}"
         )
+        if unserved_due_no_active_route_besides_current:
+            print(
+                "Unserved (no active route besides current): "
+                f"{unserved_due_no_active_route_besides_current}"
+            )
+        if unserved_due_no_route_without_broken_edge:
+            print(
+                "Unserved (no route without broken edge): "
+                f"{unserved_due_no_route_without_broken_edge}"
+            )
+        if unserved_due_mixed_stage3_reason:
+            print(
+                "Unserved (mixed: no active route + no route without broken edge): "
+                f"{unserved_due_mixed_stage3_reason}"
+            )
     else:
         print(f"Unserved rate/customers : {unserved_rate_formatted} | none")
-    print(f"Feasible (routes)       : {routes_feasible_now}")
-    print(f"Feasible (fleet)        : {fleet_feasible_now}")
-    print(f"Feasible (full)         : {fully_feasible_now}")
-    print(f"Feasible (w/ broken)    : {feasible_considering_broken}")
+
+    print("--- Hard Constraints (Physical Limits) ---")
+    broken_edge_label = "OK" if broken_edge_feasible else "VIOLATION"
+    fleet_label = "OK" if fleet_feasible_now else "VIOLATION"
+    system_viability_label = (
+        "PERFECT (No physical laws broken)"
+        if feasible_hard_constraints
+        else "CRITICAL (Physical limits violated)"
+    )
+    print(f"Broken Edge Integrity : {broken_edge_label} ({broken_edge_feasible})")
+    print(f"Fleet Limits          : {fleet_label} ({fleet_feasible_now})")
+    print(f"System Viability      : {system_viability_label}")
     if routes_using_broken:
-        print(f"Routes using broken edges: {routes_using_broken}")
+        print(f"  -> Violating Routes : {routes_using_broken}")
+
+    print("\n--- Soft Constraints (Operational Norms) ---")
+    duration_label = "OK" if duration_feasible else "CONTINGENCY ACTIVATED"
+    capacity_label = "OK" if capacity_feasible else "CONTINGENCY ACTIVATED"
+    print(f"Duration Compliance   : {duration_label} ({duration_feasible})")
+    if not duration_feasible:
+        print(
+            "  -> Contingency Stats : "
+            f"forced_customers={duration_forced_customers}, "
+            f"excess/limit={duration_total_excess:.2f}/{duration_total_limit:.2f} "
+            f"({duration_excess_vs_limit_pct:+.2f}%)"
+        )
+        duration_hero_route = max(
+            duration_violations,
+            key=lambda item: (item["customers_count"], item["excess"], -item["route_id"]),
+        )
+        print(
+            "  -> Hero Route        : "
+            f"route={duration_hero_route['route_id']}, "
+            f"depot={duration_hero_route['depot_index']}, "
+            f"customers={duration_hero_route['customers_count']}"
+        )
+
+    print(f"Capacity Compliance   : {capacity_label} ({capacity_feasible})")
+    if not capacity_feasible:
+        print(
+            "  -> Contingency Stats : "
+            f"forced_customers={capacity_forced_customers}, "
+            f"excess/limit={capacity_total_excess:.2f}/{capacity_total_limit:.2f} "
+            f"({capacity_excess_vs_limit_pct:+.2f}%)"
+        )
+        capacity_hero_route = max(
+            capacity_violations,
+            key=lambda item: (item["customers_count"], item["excess"], -item["route_id"]),
+        )
+        print(
+            "  -> Hero Route        : "
+            f"route={capacity_hero_route['route_id']}, "
+            f"depot={capacity_hero_route['depot_index']}, "
+            f"customers={capacity_hero_route['customers_count']}"
+        )
+
+    print("\n--- Mission Final Status ---")
+    print(f"Unserved Victims      : {len(unserved_customers)}")
+    print(f"Operation Verdict     : {operation_verdict}")
 
     # Persist aggregated summary to JSON for analysis
     try:
@@ -1255,10 +1539,49 @@ def run_simulation(
             "unserved_stage3_fallback_customers": unserved_from_stage3_fallback,
             "unserved_non_stage3_count": len(unserved_not_from_stage3_fallback),
             "unserved_non_stage3_customers": unserved_not_from_stage3_fallback,
+            "unserved_no_active_route_besides_current_count": len(
+                unserved_due_no_active_route_besides_current
+            ),
+            "unserved_no_active_route_besides_current_customers": (
+                unserved_due_no_active_route_besides_current
+            ),
+            "unserved_no_route_without_broken_edge_count": len(
+                unserved_due_no_route_without_broken_edge
+            ),
+            "unserved_no_route_without_broken_edge_customers": (
+                unserved_due_no_route_without_broken_edge
+            ),
+            "unserved_mixed_no_active_and_no_safe_route_count": len(
+                unserved_due_mixed_stage3_reason
+            ),
+            "unserved_mixed_no_active_and_no_safe_route_customers": (
+                unserved_due_mixed_stage3_reason
+            ),
             "unserved_rate_percent": round(unserved_rate_percent, 2),
             "unserved_rate": unserved_rate_formatted,
             "feasible": routes_feasible_now,
+            "feasible_capacity": capacity_feasible,
+            "capacity_overflow": {
+                "routes_count": len(capacity_violations),
+                "forced_customers_count": capacity_forced_customers,
+                "total_excess": round(capacity_total_excess, 4),
+                "total_limit": round(capacity_total_limit, 4),
+                "excess_vs_limit_percent": round(capacity_excess_vs_limit_pct, 2),
+                "routes": capacity_violations,
+            },
+            "feasible_duration": duration_feasible,
+            "duration_overflow": {
+                "routes_count": len(duration_violations),
+                "forced_customers_count": duration_forced_customers,
+                "total_excess": round(duration_total_excess, 4),
+                "total_limit": round(duration_total_limit, 4),
+                "excess_vs_limit_percent": round(duration_excess_vs_limit_pct, 2),
+                "routes": duration_violations,
+            },
+            "feasible_soft_constraints": feasible_soft_constraints,
+            "feasible_broken_edges": broken_edge_feasible,
             "fleet_feasible": fleet_feasible_now,
+            "feasible_hard_constraints": feasible_hard_constraints,
             "fully_feasible": fully_feasible_now,
             "feasible_considering_broken": feasible_considering_broken,
             "routes_using_broken": routes_using_broken,
@@ -1285,6 +1608,9 @@ def _handle_disaster(
     reroute_degradation_threshold: float,
     cluster_degradation_threshold: float,
     forced_unserved_customer_ids: set[int],
+    unserved_no_active_route_ids: set[int],
+    unserved_no_route_without_broken_edge_ids: set[int],
+    unserved_mixed_reason_ids: set[int],
 ) -> Tuple[int, float, str | None]:
     """
     Handle edge block event by finding affected vehicle and rerouting.
@@ -1324,6 +1650,14 @@ def _handle_disaster(
     # U-turn exception: when currently on the broken edge, commitment is broken and wasted travel is accounted.
     wasted_travel_time, wasted_travel_distance, event_start_node, reroute_start_time = calculate_wasted_distance(
         affected_vehicle_state, current_node, on_broken_edge, leg, current_time
+    )
+
+    simulation_cfg = getattr(getattr(algorithm, "cfg", None), "simulation", None)
+    penalty_overcapacity_per_unit = float(
+        getattr(simulation_cfg, "penalty_overcapacity_per_unit", 100000.0)
+    )
+    penalty_overtime_per_minute = float(
+        getattr(simulation_cfg, "penalty_overtime_per_minute", 50000.0)
     )
 
     # Pending pool for optimization (ordered and commitment-aware).
@@ -1376,22 +1710,28 @@ def _handle_disaster(
         historical_wasted_duration=historical_wasted_duration,
         historical_wasted_distance=historical_wasted_distance,
         original_route_cost=original_route_cost,
+        original_route=original_route,
         reroute_degradation_threshold=reroute_degradation_threshold,
         blocked_edges=blocked_edges,
     )
 
     def _stage1_fallback_is_valid() -> bool:
+        is_valid = is_feasible(
+            stage1_combined_route,
+            original_route=original_route,
+            start_node=event_start_node,
+            blocked_edges=blocked_edges,
+        )
         uses_broken_edge = _path_uses_blocked_edge(
             event_start_node,
             stage1_customers,
             original_route.depot,
             blocked_edges,
         )
-        is_feasible = stage1_combined_route.is_feasible()
-        if not is_feasible or uses_broken_edge:
+        if not is_valid or uses_broken_edge:
             print(
                 "Stage 1 fallback rejected "
-                f"(feasible={is_feasible}, uses_broken_edge={uses_broken_edge})."
+                f"(feasible={is_valid}, uses_broken_edge={uses_broken_edge})."
             )
             return False
         return True
@@ -1401,14 +1741,19 @@ def _handle_disaster(
     ) -> bool:
         for route_id, data in routes_by_id.items():
             combined_route: Route = data["combined_route"]
-            if not combined_route.is_feasible():
+            item = data["item"]
+            if not is_feasible(
+                combined_route,
+                original_route=item["state"].route,
+                start_node=item["event_start_node"],
+                blocked_edges=blocked_edges,
+            ):
                 print(
                     "Stage 2 fallback rejected "
                     f"(route={route_id}, feasible=False)."
                 )
                 return False
 
-            item = data["item"]
             future_route: Route = data["future_route"]
             uses_broken_edge = _path_uses_blocked_edge(
                 item["event_start_node"],
@@ -1504,11 +1849,15 @@ def _handle_disaster(
             }
             stage3_routes_snapshot = routes_before_stage3
             stage3_distance_matrix = _build_stage3_distance_matrix(vehicle_states, blocked_edges)
+            stage3_target_diagnostics: dict[str, int] = {}
             rescued_state = stage3_global_cross_depot_repair(
                 target_node=target_node,
                 vehicle_states=vehicle_states,
                 distance_matrix=stage3_distance_matrix,
                 blocked_vehicle_id=affected_route,
+                penalty_overcapacity_per_unit=penalty_overcapacity_per_unit,
+                penalty_overtime_per_minute=penalty_overtime_per_minute,
+                diagnostics_out=stage3_target_diagnostics,
             )
 
             if rescued_state is None:
@@ -1534,6 +1883,12 @@ def _handle_disaster(
                     event_queue=event_queue,
                     current_time=current_time,
                     forced_unserved_customer_ids=forced_unserved_customer_ids,
+                    target_unserved_diagnostics=stage3_target_diagnostics,
+                    unserved_no_active_route_ids=unserved_no_active_route_ids,
+                    unserved_no_route_without_broken_edge_ids=unserved_no_route_without_broken_edge_ids,
+                    unserved_mixed_reason_ids=unserved_mixed_reason_ids,
+                    penalty_overcapacity_per_unit=penalty_overcapacity_per_unit,
+                    penalty_overtime_per_minute=penalty_overtime_per_minute,
                 )
 
                 if fixed_next_customer is not None:
@@ -1621,6 +1976,12 @@ def _handle_disaster(
                     event_queue=event_queue,
                     current_time=current_time,
                     forced_unserved_customer_ids=forced_unserved_customer_ids,
+                    target_unserved_diagnostics=None,
+                    unserved_no_active_route_ids=unserved_no_active_route_ids,
+                    unserved_no_route_without_broken_edge_ids=unserved_no_route_without_broken_edge_ids,
+                    unserved_mixed_reason_ids=unserved_mixed_reason_ids,
+                    penalty_overcapacity_per_unit=penalty_overcapacity_per_unit,
+                    penalty_overtime_per_minute=penalty_overtime_per_minute,
                 )
 
                 _commit_stage3_updates(

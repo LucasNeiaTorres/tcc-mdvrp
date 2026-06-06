@@ -59,14 +59,48 @@ class Route:
         projected_service = sum(c.service_time for c in self.customers)
         return self.wasted_duration + self._projected_distance() + projected_service
 
-    def is_feasible(self) -> bool:
-        """Check whether this route satisfies both capacity and duration constraints."""
-        capacity_ok = self.total_demand() <= self.depot.max_capacity
-        duration_ok = (
-            self.depot.max_duration == 0  # 0 means unconstrained
-            or self.total_duration() <= self.depot.max_duration
+    def _capacity_limit(self, original_route: "Route | None" = None) -> float:
+        """Capacity limit with optional historical tolerance."""
+        nominal_limit = self.depot.max_capacity
+        if original_route is None or original_route.depot.index != self.depot.index:
+            return nominal_limit
+        return max(nominal_limit, original_route.total_demand())
+
+    def _duration_limit(self, original_route: "Route | None" = None) -> float:
+        """Duration limit with optional historical tolerance."""
+        nominal_limit = self.depot.max_duration
+        if nominal_limit == 0:  # 0 means unconstrained.
+            return 0.0
+        if original_route is None or original_route.depot.index != self.depot.index:
+            return nominal_limit
+        return max(nominal_limit, original_route.total_duration())
+
+    def capacity_excess(self, original_route: "Route | None" = None) -> float:
+        """Return load excess over the tolerated capacity limit."""
+        return max(0.0, self.total_demand() - self._capacity_limit(original_route))
+
+    def overtime_excess(self, original_route: "Route | None" = None) -> float:
+        """Return duration excess over the tolerated duration limit."""
+        duration_limit = self._duration_limit(original_route)
+        if duration_limit == 0.0:
+            return 0.0
+        return max(0.0, self.total_duration() - duration_limit)
+
+    def fitness_cost(
+        self,
+        penalty_overcapacity_per_unit: float = 100000.0,
+        penalty_overtime_per_minute: float = 50000.0,
+    ) -> float:
+        """Soft-constraint objective used by Stage 3 single-pass evaluation."""
+        return (
+            self.total_distance()
+            + self.capacity_excess() * penalty_overcapacity_per_unit
+            + self.overtime_excess() * penalty_overtime_per_minute
         )
-        return capacity_ok and duration_ok
+
+    def is_feasible(self, original_route: "Route | None" = None) -> bool:
+        """Check capacity and duration feasibility with optional historical tolerance."""
+        return self.capacity_excess(original_route) <= 0.0 and self.overtime_excess(original_route) <= 0.0
 
     @property
     def depot_index(self) -> int:

@@ -31,6 +31,8 @@ class GAConfig:
 class SimulationConfig:
     reroute_degradation_threshold: float = 1.20
     cluster_degradation_threshold: float = 1.05
+    penalty_overcapacity_per_unit: float = 100000.0
+    penalty_overtime_per_minute: float = 50000.0
 
 
 @dataclass
@@ -79,6 +81,18 @@ def load_config(path: Optional[str] = None) -> AppConfig:
             ),
             cluster_degradation_threshold=float(
                 simulation_raw.get("cluster_degradation_threshold", 1.05)
+            ),
+            penalty_overcapacity_per_unit=float(
+                simulation_raw.get(
+                    "penalty_overcapacity_per_unit",
+                    simulation_raw.get("penalty_overcapacity_per_unit", 100000.0),
+                )
+            ),
+            penalty_overtime_per_minute=float(
+                simulation_raw.get(
+                    "penalty_overtime_per_minute",
+                    simulation_raw.get("penalty_overtime_per_minute", 50000.0),
+                )
             ),
         ),
     )

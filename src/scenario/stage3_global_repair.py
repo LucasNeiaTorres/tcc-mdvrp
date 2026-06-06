@@ -10,14 +10,21 @@ from core.entities import Customer, Route
 from scenario.state import VehicleState
 
 
+EPS = 1e-9
+
+
 @dataclass(frozen=True)
-class _BestInsertion:
-	"""Internal holder for the globally cheapest feasible insertion."""
+class _InsertionEvaluation:
+	"""Single insertion evaluation record used by Stage 3."""
 
 	vehicle_id: int
 	suffix_start: int
 	edge_position: int
 	delta_cost: float
+	distance_cost: float
+	fitness_cost: float
+	overcapacity: float
+	overtime: float
 
 
 def _matrix_distance(
@@ -96,27 +103,81 @@ def _clone_state_with_route(state: VehicleState, route: Route) -> VehicleState:
 	return updated
 
 
+def _evaluate_insertion(
+	*,
+	state: VehicleState,
+	route_customers: list[Customer],
+	suffix_start: int,
+	edge_position: int,
+	target_node: int,
+	target_customer: Customer,
+	distance_matrix: Sequence[Sequence[float]],
+	penalty_overcapacity_per_unit: float,
+	penalty_overtime_per_minute: float,
+) -> _InsertionEvaluation | None:
+	"""Evaluate one candidate insertion (hard + soft metrics) in a single pass."""
+	suffix = route_customers[suffix_start:]
+	scan_nodes = [customer.index for customer in suffix] + [state.route.depot.index]
+	node_i = scan_nodes[edge_position]
+	node_j = scan_nodes[edge_position + 1]
+
+	delta_cost = (
+		_matrix_distance(distance_matrix, node_i, target_node)
+		+ _matrix_distance(distance_matrix, target_node, node_j)
+		- _matrix_distance(distance_matrix, node_i, node_j)
+	)
+
+	# Hard rule: any blocked-edge traversal is rejected immediately.
+	if delta_cost == float("inf"):
+		return None
+
+	tentative_customers, _ = _insert_target_on_suffix(
+		customers=route_customers,
+		suffix_start=suffix_start,
+		edge_position=edge_position,
+		target_customer=target_customer,
+	)
+	tentative_route = _route_with_same_history(state, tentative_customers)
+
+	overcapacity = tentative_route.capacity_excess()
+	overtime = tentative_route.overtime_excess()
+	distance_cost = tentative_route.total_distance()
+	fitness_cost = tentative_route.fitness_cost(
+		penalty_overcapacity_per_unit=penalty_overcapacity_per_unit,
+		penalty_overtime_per_minute=penalty_overtime_per_minute,
+	)
+	return _InsertionEvaluation(
+		vehicle_id=state.route_id,
+		suffix_start=suffix_start,
+		edge_position=edge_position,
+		delta_cost=delta_cost,
+		distance_cost=distance_cost,
+		fitness_cost=fitness_cost,
+		overcapacity=overcapacity,
+		overtime=overtime,
+	)
+
+
+def _is_hard_feasible(evaluation: _InsertionEvaluation) -> bool:
+	"""Layer-1 hard validation (strict legal insertion)."""
+	return evaluation.overcapacity <= 0.0 and evaluation.overtime <= 0.0
+
+
 def stage3_global_cross_depot_repair(
 	target_node: int,
 	vehicle_states: dict[int, VehicleState],
 	distance_matrix: Sequence[Sequence[float]],
 	blocked_vehicle_id: int,
+	penalty_overcapacity_per_unit: float,
+	penalty_overtime_per_minute: float,
+	diagnostics_out: dict[str, int] | None = None,
 ) -> VehicleState | None:
 	"""
-	Stage 3 fallback: global cross-depot rescue using cheapest insertion + VND.
+	Stage 3 fallback with single-pass two-layer validation.
 
-	Rules implemented from the provided specification:
-	- Candidate vehicles are scanned globally (all depots), excluding the blocked one.
-	- A candidate is valid only when it is not completed.
-	- Prefix is frozen up to current_step-1 (mapped to next_stop_index-1).
-	- Insertion is tested only in the unfrozen suffix (after current_step).
-	- Feasibility enforces full-turn capacity and max shift duration.
-	- Winning route receives VND intra-route refinement (M1/M2/M3) on suffix.
-
-	Returns
-	-------
-	VehicleState | None
-		Updated winner vehicle state, or None if no feasible insertion exists.
+	Layer 1 prioritizes fully legal (hard-feasible) insertions.
+	Layer 2 keeps the best soft-feasible insertion by penalized fitness,
+	used only when no legal insertion exists.
 	"""
 	print(
 		"[Stage 3][INFO] Global cross-depot repair triggered: "
@@ -136,10 +197,14 @@ def stage3_global_cross_depot_repair(
 		)
 		return None
 
-	best: _BestInsertion | None = None
+	best_feasible: _InsertionEvaluation | None = None
+	best_infeasible: _InsertionEvaluation | None = None
 	scanned_vehicle_count = 0
+	eligible_vehicle_count = 0
+	routes_with_open_insertion_count = 0
+	routes_all_insertions_blocked_count = 0
 
-	# Global vehicle scan: evaluate cheapest feasible insertion for each valid candidate.
+	# Single-pass scan over all candidate vehicles and all insertion edges.
 	for vehicle_id, state in vehicle_states.items():
 		if vehicle_id == blocked_vehicle_id:
 			print(f"[Stage 3][DEBUG] Vehicle {vehicle_id} rejected: blocked vehicle.")
@@ -175,78 +240,91 @@ def stage3_global_cross_depot_repair(
 			)
 			continue
 
+		eligible_vehicle_count += 1
 		suffix = route_customers[suffix_start:]
-		scan_nodes = [customer.index for customer in suffix] + [state.route.depot.index]
-
-		# Cheapest insertion over edges (i, j) in the unfrozen suffix.
-		for edge_position in range(len(scan_nodes) - 1):
-			node_i = scan_nodes[edge_position]
-			node_j = scan_nodes[edge_position + 1]
-
-			delta_cost = (
-				_matrix_distance(distance_matrix, node_i, target_node)
-				+ _matrix_distance(distance_matrix, target_node, node_j)
-				- _matrix_distance(distance_matrix, node_i, node_j)
-			)
-   
-			if delta_cost == float("inf"):
-				print(
-					f"[Stage 3][DEBUG] Vehicle {vehicle_id} edge ({node_i},{node_j}) "
-					"rejected: insertion attempts to cross a blocked edge."
-				)
-				continue
-
-			tentative_customers, _ = _insert_target_on_suffix(
-				customers=route_customers,
+		edge_count = len(suffix)  # suffix nodes + depot yields exactly len(suffix) edges.
+		route_has_open_insertion = False
+		for edge_position in range(edge_count):
+			evaluation = _evaluate_insertion(
+				state=state,
+				route_customers=route_customers,
 				suffix_start=suffix_start,
 				edge_position=edge_position,
+				target_node=target_node,
 				target_customer=target_customer,
+				distance_matrix=distance_matrix,
+				penalty_overcapacity_per_unit=penalty_overcapacity_per_unit,
+				penalty_overtime_per_minute=penalty_overtime_per_minute,
 			)
-			tentative_route = _route_with_same_history(state, tentative_customers)
-
-			total_demand = sum(customer.demand for customer in tentative_customers)
-			if total_demand > state.route.depot.max_capacity:
-				print(
-					f"[Stage 3][DEBUG] Vehicle {vehicle_id} edge ({node_i},{node_j}) "
-					"rejected: "
-					f"capacity {total_demand:.2f} > {state.route.depot.max_capacity:.2f}."
-				)
+			if evaluation is None:
 				continue
 
-			max_shift_duration = state.route.depot.max_duration
-			if max_shift_duration > 0 and tentative_route.total_duration() > max_shift_duration:
-				print(
-					f"[Stage 3][DEBUG] Vehicle {vehicle_id} edge ({node_i},{node_j}) "
-					"rejected: "
-					f"duration {tentative_route.total_duration():.2f} > "
-					f"{max_shift_duration:.2f}."
-				)
+			route_has_open_insertion = True
+
+			if _is_hard_feasible(evaluation):
+				if (
+					best_feasible is None
+					or evaluation.delta_cost < best_feasible.delta_cost - EPS
+					or (
+						abs(evaluation.delta_cost - best_feasible.delta_cost) <= EPS
+						and evaluation.distance_cost < best_feasible.distance_cost - EPS
+					)
+				):
+					best_feasible = evaluation
 				continue
 
-			if best is None or delta_cost < best.delta_cost:
-				best = _BestInsertion(
-					vehicle_id=vehicle_id,
-					suffix_start=suffix_start,
-					edge_position=edge_position,
-					delta_cost=delta_cost,
+			if (
+				best_infeasible is None
+				or evaluation.fitness_cost < best_infeasible.fitness_cost - EPS
+				or (
+					abs(evaluation.fitness_cost - best_infeasible.fitness_cost) <= EPS
+					and evaluation.delta_cost < best_infeasible.delta_cost - EPS
 				)
+			):
+				best_infeasible = evaluation
+
+		if route_has_open_insertion:
+			routes_with_open_insertion_count += 1
+		else:
+			routes_all_insertions_blocked_count += 1
 
 	print(f"[Stage 3][INFO] Scanned {scanned_vehicle_count} candidate vehicles globally.")
+	if diagnostics_out is not None:
+		diagnostics_out["active_other_routes_count"] = scanned_vehicle_count
+		diagnostics_out["eligible_other_routes_count"] = eligible_vehicle_count
+		diagnostics_out["routes_with_open_insertion_count"] = routes_with_open_insertion_count
+		diagnostics_out["routes_all_insertions_blocked_count"] = routes_all_insertions_blocked_count
 
-	if best is None:
-		print(f"[Stage 3][INFO] No feasible insertion found for target_node={target_node}.")
-		return None
+	# Two-layer decision gate: feasible first, then best penalized infeasible.
+	selected = best_feasible
+	if selected is not None:
+		print(
+			"[Stage 3][INFO] Winner selected from hard-feasible set: "
+			f"vehicle={selected.vehicle_id}, target_node={target_node}, "
+			f"distance_cost={selected.distance_cost:.4f}, delta_c={selected.delta_cost:.4f}."
+		)
+	else:
+		selected = best_infeasible
+		if selected is None:
+			print(f"[Stage 3][INFO] No insertion found for target_node={target_node}.")
+			return None
+		print(
+			"[Stage 3][WARN] Soft-constraint contingency activated: "
+			f"vehicle={selected.vehicle_id}, target_node={target_node}, "
+			f"overcapacity={selected.overcapacity:.2f}, overtime={selected.overtime:.2f}, "
+			f"fitness={selected.fitness_cost:.4f}."
+		)
 
-	winner_state = vehicle_states[best.vehicle_id]
+	winner_state = vehicle_states[selected.vehicle_id]
 	winner_customers = list(winner_state.route.customers)
 	full_customers_after_insert, inserted_suffix = _insert_target_on_suffix(
 		customers=winner_customers,
-		suffix_start=best.suffix_start,
-		edge_position=best.edge_position,
+		suffix_start=selected.suffix_start,
+		edge_position=selected.edge_position,
 		target_customer=target_customer,
 	)
 
-	# Keep current_step customer fixed and optimize only the remaining suffix tail.
+	# Keep current-step customer fixed and optimize only the remaining suffix tail.
 	fixed_first = inserted_suffix[0]
 
 	def _dist(node_i: int, node_j: int) -> float:
@@ -261,17 +339,16 @@ def stage3_global_cross_depot_repair(
 	optimized_suffix = [fixed_first, *optimized_tail]
 
 	updated_winner_customers = [
-		*full_customers_after_insert[: best.suffix_start],
+		*full_customers_after_insert[: selected.suffix_start],
 		*optimized_suffix,
 	]
 	updated_route = _route_with_same_history(winner_state, updated_winner_customers)
 	updated_winner_state = _clone_state_with_route(winner_state, updated_route)
 
 	print(
-		"[Stage 3][INFO] Winner selected: "
+		"[Stage 3][INFO] Winner route committed: "
 		f"vehicle={updated_winner_state.route_id}, "
 		f"depot={updated_winner_state.route.depot.index}, "
-		f"target_node={target_node}, "
-		f"delta_c={best.delta_cost:.4f}."
+		f"target_node={target_node}."
 	)
 	return updated_winner_state

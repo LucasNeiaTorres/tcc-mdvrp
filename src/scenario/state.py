@@ -86,7 +86,7 @@ class VehicleState:
         if demand < 0:
             raise ValueError("demand must be non-negative")
         if not self.can_add_load(demand):
-            raise ValueError("vehicle capacity exceeded")
+            print(f"Warning: Adding demand {demand} exceeds capacity for vehicle {self.route_id} (current load: {self.load_current}, capacity: {self.capacity_total})")
         self.load_current += demand
 
     def remove_load(self, amount: float) -> None:

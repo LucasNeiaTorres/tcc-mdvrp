@@ -35,12 +35,7 @@ def handle_arrival(
         return
 
     if not state.can_add_load(customer.demand):
-        state.status = "blocked"
-        print(
-            f"Vehicle {route_id} cannot load demand {customer.demand} at node {node_index}; "
-            f"remaining capacity={state.capacity_remaining:.2f}"
-        )
-        return
+        print(f"Warning: Vehicle {route_id} operating overloaded at arrival to node {node_index} (current load: {state.load_current}, customer demand: {customer.demand}, capacity: {state.route.depot.max_capacity})")
 
     state.add_load(customer.demand)
     state.mark_visited(int(node_index))
