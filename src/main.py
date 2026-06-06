@@ -2,6 +2,8 @@ import argparse
 import time
 from pathlib import Path
 
+import matplotlib.pyplot as plt
+
 from algorithms.ccbc_ga import CCBCGAAlgorithm
 from utils.config import load_config
 from utils.converter import load_instance
@@ -164,7 +166,9 @@ def main() -> int:
             print("Simulation skipped (--no-simulate).")
         else:
             print("No failures file found; skipping simulation.")
-    
+
+    plt.show()  # keep all non-blocking windows open until manually closed
+    return 0
 
 
 if __name__ == "__main__":
