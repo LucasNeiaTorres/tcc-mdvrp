@@ -156,12 +156,16 @@ class LSMutation(Mutation):
         dist_fn: Callable[[int, int], float],
         prob: float,
         local_search_max_iterations: int,
+        capacity_penalty: float,
+        duration_penalty: float,
     ) -> None:
         super().__init__(prob=prob)
         self.depot = depot
         self.customers = customers
         self.dist_fn = dist_fn
         self.local_search_max_iterations = local_search_max_iterations
+        self.capacity_penalty = capacity_penalty
+        self.duration_penalty = duration_penalty
         # Map customer object → position in customers list for re-encoding
         self._customer_pos = {c: i for i, c in enumerate(customers)}
 
@@ -177,8 +181,13 @@ class LSMutation(Mutation):
                 continue
 
             ordered = [self.customers[i] for i in X[k]]
-            segments = linear_split(ordered, self.depot, self.dist_fn)
-            improved_segs = local_search(segments, self.depot, self.dist_fn, self.local_search_max_iterations)
+            segments = linear_split(ordered, self.depot, self.dist_fn,
+                                     capacity_penalty=self.capacity_penalty,
+                                     duration_penalty=self.duration_penalty)
+            improved_segs = local_search(segments, self.depot, self.dist_fn,
+                                         self.local_search_max_iterations,
+                                         capacity_penalty=self.capacity_penalty,
+                                         duration_penalty=self.duration_penalty)
 
             # Re-encode: flatten improved segments → integer permutation
             new_order = [c for route in improved_segs for c in route]

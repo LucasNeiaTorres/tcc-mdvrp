@@ -50,18 +50,10 @@ from typing import Dict, List, Optional, Tuple
 
 from core.entities import Customer, Depot
 from utils.config import CCBCConfig
+from utils.metrics import euclidean_distance
 
 # TODO: replace to use config seed
 _RNG_SEED = 42
-
-
-# ---------------------------------------------------------------------------
-# Internal helpers
-# ---------------------------------------------------------------------------
-
-def _euclidean(x1: float, y1: float, x2: float, y2: float) -> float:
-    return math.sqrt((x2 - x1) ** 2 + (y2 - y1) ** 2)
-
 
 def _build_slots(depots: List[Depot]) -> Tuple[List[Depot], List[float], List[float]]:
     """
@@ -110,7 +102,7 @@ def _simple_kmeans_centroids(
     for _ in range(max_iter):
         clusters: List[List[Tuple[float, float]]] = [[] for _ in range(k)]
         for p in points:
-            nearest = min(range(k), key=lambda s: _euclidean(p[0], p[1], centroids[s][0], centroids[s][1]))
+            nearest = min(range(k), key=lambda s: euclidean_distance(p[0], p[1], centroids[s][0], centroids[s][1]))
             clusters[nearest].append(p)
 
         new_centroids: List[Tuple[float, float]] = []
@@ -160,7 +152,7 @@ def _init_centroids(
         for c in customers:
             nearest_depot_idx = min(
                 range(len(depots)),
-                key=lambda i: _euclidean(c.x, c.y, depots[i].x, depots[i].y),
+                key=lambda i: euclidean_distance(c.x, c.y, depots[i].x, depots[i].y),
             )
             depot_members[nearest_depot_idx].append((c.x, c.y))
 
@@ -220,7 +212,7 @@ def _assign_customers(
 
     # Pre-compute centroid distances: customer i → slot s
     dists = [
-        [_euclidean(c.x, c.y, centroids[s][0], centroids[s][1]) for s in range(k)]
+        [euclidean_distance(c.x, c.y, centroids[s][0], centroids[s][1]) for s in range(k)]
         for c in customers
     ]
 
@@ -229,7 +221,7 @@ def _assign_customers(
         c = customers[i]
         if slot_members[s]:
             travel = min(
-                _euclidean(c.x, c.y, q.x, q.y) for q in slot_members[s]
+                euclidean_distance(c.x, c.y, q.x, q.y) for q in slot_members[s]
             )
         else:
             travel = dists[i][s]
@@ -288,10 +280,6 @@ def _assign_customers(
     return assignment
 
 
-# ---------------------------------------------------------------------------
-# Public API
-# ---------------------------------------------------------------------------
-
 def run_ccbc_clustering(
     customers: List[Customer],
     depots: List[Depot],
@@ -323,7 +311,7 @@ def run_ccbc_clustering(
     # Sigma for Gaussian perturbation = 10 % of mean inter-depot distance
     if len(depots) >= 2:
         inter_depot_distances = [
-            _euclidean(depots[i].x, depots[i].y, depots[j].x, depots[j].y)
+            euclidean_distance(depots[i].x, depots[i].y, depots[j].x, depots[j].y)
             for i in range(len(depots))
             for j in range(i + 1, len(depots))
         ]
@@ -369,7 +357,7 @@ def run_ccbc_clustering(
 
             # Convergence: max centroid shift
             max_shift = max(
-                _euclidean(centroids[s][0], centroids[s][1], new_centroids[s][0], new_centroids[s][1])
+                euclidean_distance(centroids[s][0], centroids[s][1], new_centroids[s][0], new_centroids[s][1])
                 for s in range(k)
             )
             centroids = new_centroids
@@ -380,7 +368,7 @@ def run_ccbc_clustering(
 
         # Evaluate this start: total customer-to-centroid distance
         cost = sum(
-            _euclidean(customers[i].x, customers[i].y, centroids[assignment[i]][0], centroids[assignment[i]][1])
+            euclidean_distance(customers[i].x, customers[i].y, centroids[assignment[i]][0], centroids[assignment[i]][1])
             for i in range(len(customers))
         )
         if cost < best_cost:

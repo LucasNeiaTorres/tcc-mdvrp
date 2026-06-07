@@ -201,7 +201,9 @@ def local_search(
     routes: List[Route | List[Customer]],
     depot: Depot,
     dist_fn: Callable[[int, int], float],
-    local_search_max_iterations: int = DEFAULT_GA_LOCAL_SEARCH_MAX_ITERATIONS,
+    local_search_max_iterations: int,
+    capacity_penalty: float,
+    duration_penalty: float,
     is_stage_2: bool = False,
     frozen_route_indices: set[int] | None = None,
     executed_capacity_by_route: List[float] | None = None,
@@ -761,11 +763,11 @@ def local_search(
                 # Stage 2 may temporarily rely on tolerance-aware feasibility;
                 # keep the current partition if strict split becomes impossible.
                 try:
-                    routes = [list(r.customers) for r in linear_split(flat, depot, dist_fn)]
+                    routes = [list(r.customers) for r in linear_split(flat, depot, dist_fn, capacity_penalty=capacity_penalty, duration_penalty=duration_penalty)]
                 except ValueError:
                     pass
             else:
-                routes = [list(r.customers) for r in linear_split(flat, depot, dist_fn)]
+                routes = [list(r.customers) for r in linear_split(flat, depot, dist_fn, capacity_penalty=capacity_penalty, duration_penalty=duration_penalty)]
 
     # Remove empty routes and return (except in Stage 2, where physical
     # vehicle index mapping is strictly required).
