@@ -1,6 +1,7 @@
 """Main simulation engine for dynamic vehicle routing with failures."""
 
 from copy import deepcopy
+from dataclasses import dataclass
 
 from pathlib import Path
 from typing import Callable, List, Tuple
@@ -10,6 +11,7 @@ from core.entities import Depot, Customer, Route
 from core.solution import Solution
 from algorithms.base import MDVRPAlgorithm
 from algorithms.ga_local_search import local_search, local_search_stage1_intra
+from utils.config import AppConfig
 from utils.results_io import save_history_log, save_reroute_result
 
 from .event_queue import EventQueue, SimulationEvent, arrival_events_from_solution, travel_time
@@ -33,6 +35,28 @@ from .state import VehicleState, _normalize_edge
 
 SIMULATION_LOG_DIR = Path(__file__).resolve().parents[2] / "data" / "processed" / "simulation_logs"
 UNIT_SPEED = 1.0
+
+
+@dataclass(frozen=True)
+class SimulationRuntimeSettings:
+    """Validated simulation runtime settings resolved once from AppConfig."""
+
+    reroute_degradation_threshold: float
+    cluster_degradation_threshold: float
+    local_search_max_iterations: int
+    penalty_overcapacity_per_unit: float
+    penalty_overtime_per_minute: float
+
+
+def _build_runtime_settings(cfg: AppConfig) -> SimulationRuntimeSettings:
+    """Build and sanitize runtime settings from typed application config."""
+    return SimulationRuntimeSettings(
+        reroute_degradation_threshold=float(cfg.simulation.reroute_degradation_threshold),
+        cluster_degradation_threshold=float(cfg.simulation.cluster_degradation_threshold),
+        local_search_max_iterations=max(1, int(cfg.ga.local_search_max_iterations)),
+        penalty_overcapacity_per_unit=max(0.0, float(cfg.simulation.penalty_overcapacity_per_unit)),
+        penalty_overtime_per_minute=max(0.0, float(cfg.simulation.penalty_overtime_per_minute)),
+    )
 
 
 def _path_uses_blocked_edge(
@@ -59,12 +83,18 @@ def is_feasible(
     *,
     start_node: Depot | Customer | None = None,
     blocked_edges: set[tuple[int, int]] | None = None,
+    blocked_edge_customers: list[Customer] | None = None,
 ) -> bool:
     """Validate route with blocked-edge hard rule and optional historical tolerance."""
     if start_node is not None and blocked_edges is not None:
+        customers_for_blocked_check = (
+            blocked_edge_customers
+            if blocked_edge_customers is not None
+            else candidate_route.customers
+        )
         if _path_uses_blocked_edge(
             start_node,
-            candidate_route.customers,
+            customers_for_blocked_check,
             candidate_route.depot,
             blocked_edges,
         ):
@@ -426,6 +456,7 @@ def reoptimize_intra_route_stage1(
         original_route=original_route,
         start_node=event_start_node,
         blocked_edges=blocked_edges,
+        blocked_edge_customers=stage1_customers,
     )
     print(
         f"Stage 1 result route: customers={[c.index for c in stage1_customers]}, "
@@ -465,6 +496,7 @@ def reoptimize_intra_cluster(
     affected_route_id: int,
     current_time: float,
     blocked_edges: set[tuple[int, int]],
+    local_search_max_iterations: int,
     cluster_degradation_threshold: float,
     event_start_node: Depot | Customer,
     reroute_start_time: float,
@@ -551,6 +583,7 @@ def reoptimize_intra_cluster(
     cluster_routes: list[list[Customer]] = []
     executed_capacity_by_route: list[float] = []
     executed_duration_by_route: list[float] = []
+    executed_last_nodes: list[Depot | Customer] = []
     route_items: list[dict[str, object]] = []
     route_items_by_id: dict[int, dict[str, object]] = {}
     empty_route_items: list[dict[str, object]] = []
@@ -624,6 +657,9 @@ def reoptimize_intra_cluster(
                     historical_wasted_duration,
                 )
             )
+            executed_last_nodes.append(
+                executed_customers[-1] if executed_customers else state.route.depot
+            )
         elif state.route_id == affected_route_id:
             route_item = {
                 "route_id": state.route_id,
@@ -645,23 +681,58 @@ def reoptimize_intra_cluster(
     if not route_items and not empty_route_items:
         return None, None
 
-    if not route_items and unassigned_customers:
+    if not route_items and not empty_route_items and unassigned_customers:
         print("Stage 2 rejected: no routes available to absorb unassigned customers.")
         return None, None
 
-    # Insert unassigned customers into the first route if possible (VND will handle them).
-    if unassigned_customers and cluster_routes:
-        cluster_routes[0].extend(unassigned_customers)
+    if unassigned_customers:
+        affected_item = route_items_by_id.get(affected_route_id)
+        if affected_item is not None:
+            was_empty = len(affected_item["route_customers"]) == 0
+            affected_item["route_customers"].extend(unassigned_customers)
+            if was_empty:
+                if affected_item in empty_route_items:
+                    empty_route_items.remove(affected_item)
+                route_items.append(affected_item)
+                cluster_routes.append(affected_item["route_customers"])
+                executed_capacity_by_route.append(
+                    sum(customer.demand for customer in affected_item["executed_customers"])
+                )
+                executed_duration_by_route.append(
+                    _executed_prefix_duration(
+                        affected_item["state"].route.depot,
+                        affected_item["executed_customers"],
+                        affected_item["wasted_duration"],
+                    )
+                )
+                executed_last_nodes.append(
+                    affected_item["executed_customers"][-1]
+                    if affected_item["executed_customers"]
+                    else affected_item["state"].route.depot
+                )
+        elif cluster_routes:
+            cluster_routes[0].extend(unassigned_customers)
 
     unique_customers: dict[int, Customer] = {}
     for route in cluster_routes:
         for customer in route:
             unique_customers[customer.index] = customer
 
-    optimized_routes: list[list[Customer]] = []
+    optimized_routes_by_id: dict[int, list[Customer]] = {}
     if route_items:
+        frozen_route_indices = {
+            idx
+            for idx, item in enumerate(route_items)
+            if item["fixed_next_customer"] is not None
+        }
+
         # Build local matrix with blocked edges and run VND local search.
-        algorithm._build_matrix([depot], list(unique_customers.values()))
+        matrix_customers: dict[int, Customer] = dict(unique_customers)
+        for node in executed_last_nodes:
+            if isinstance(node, Customer):
+                matrix_customers[node.index] = node
+
+        algorithm._build_matrix([depot], list(matrix_customers.values()))
         for edge in blocked_edges:
             algorithm._set_edge_inf(*edge)
 
@@ -669,41 +740,18 @@ def reoptimize_intra_cluster(
             deepcopy(cluster_routes),
             depot,
             algorithm._dist,
+            local_search_max_iterations=local_search_max_iterations,
             is_stage_2=True,
-            apply_frozen_prefix=True,
+            frozen_route_indices=frozen_route_indices,
             executed_capacity_by_route=executed_capacity_by_route,
             executed_duration_by_route=executed_duration_by_route,
+            executed_last_nodes=executed_last_nodes,
         )
 
-    prefix_to_item = {
-        item["route_customers"][0].index: item
-        for item in route_items
-    }
-    assigned_routes: dict[int, list[Customer]] = {}
-    leftover_routes: list[list[Customer]] = []
-
-    for route in optimized_routes:
-        if not route:
-            continue
-        first_idx = route[0].index
-        if first_idx in prefix_to_item and first_idx not in assigned_routes:
-            assigned_routes[first_idx] = route
-        else:
-            leftover_routes.append(route)
-
-    if leftover_routes:
-        leftover_ids = sorted({c.index for route in leftover_routes for c in route})
-        print(
-            "Stage 2 rejected: unmatched optimized routes or prefix mismatch. "
-            f"leftover_customers={leftover_ids}"
-        )
-        return None, None
-
-    for item in route_items:
-        prefix_idx = item["route_customers"][0].index
-        if prefix_idx not in assigned_routes:
-            print("Stage 2 rejected: missing route for frozen prefix.")
-            return None, None
+        # 1:1 index mapping: with Stage-2 split disabled and empty routes
+        # preserved, optimized_routes aligns with route_items by position.
+        for item, opt_route in zip(route_items, optimized_routes):
+            optimized_routes_by_id[item["route_id"]] = opt_route
 
     new_routes_by_id: dict[int, dict[str, object]] = {}
     new_cluster_cost = 0.0
@@ -717,11 +765,7 @@ def reoptimize_intra_cluster(
             )
             continue
 
-        if item["route_customers"]:
-            prefix_idx = item["route_customers"][0].index
-            optimized_pending = assigned_routes[prefix_idx]
-        else:
-            optimized_pending = []
+        optimized_pending = optimized_routes_by_id.get(state.route_id, [])
         combined_customers = [*item["executed_customers"], *optimized_pending]
         combined_route = Route(
             depot=state.route.depot,
@@ -750,24 +794,60 @@ def reoptimize_intra_cluster(
 
     # Gatekeeper: feasibility, broken edge avoidance, and cluster cost threshold.
     all_routes_feasible = True
+    infeasible_diagnostics: list[str] = []
     for route_id, data in new_routes_by_id.items():
         item = data["item"]
-        if not is_feasible(
-            data["combined_route"],
-            original_route=item["state"].route,
+        combined_route: Route = data["combined_route"]
+        future_route: Route = data["future_route"]
+        tolerance_baseline = Route(
+            depot=item["state"].route.depot,
+            customers=list(item["state"].route.customers),
+            wasted_duration=item["wasted_duration"],
+            wasted_distance=item["wasted_distance"],
+        )
+
+        uses_broken = _path_uses_blocked_edge(
+            item["event_start_node"],
+            future_route.customers,
+            combined_route.depot,
+            blocked_edges,
+        )
+        capacity_excess = combined_route.capacity_excess(tolerance_baseline)
+        overtime_excess = combined_route.overtime_excess(tolerance_baseline)
+        capacity_limit = combined_route._capacity_limit(tolerance_baseline)
+        duration_limit = combined_route._duration_limit(tolerance_baseline)
+        duration_limit_text = "unbounded" if duration_limit == 0 else f"{duration_limit:.2f}"
+
+        route_is_feasible = is_feasible(
+            combined_route,
+            original_route=tolerance_baseline,
             start_node=item["event_start_node"],
             blocked_edges=blocked_edges,
-        ):
-            uses_broken = _path_uses_blocked_edge(
-                item["event_start_node"],
-                data["future_route"].customers,
-                data["combined_route"].depot,
-                blocked_edges,
-            )
+            blocked_edge_customers=future_route.customers,
+        )
+
+        if not route_is_feasible:
             if uses_broken:
                 print(f"Stage 2 rejected: route {route_id} attempts to cross a blocked edge.")
+
+            reasons: list[str] = []
+            if uses_broken:
+                reasons.append("blocked_edge")
+            if capacity_excess > 0:
+                reasons.append(f"capacity_excess={capacity_excess:.2f}")
+            if overtime_excess > 0:
+                reasons.append(f"duration_excess={overtime_excess:.2f}")
+            if not reasons:
+                reasons.append("unknown_constraint_violation")
+
+            infeasible_diagnostics.append(
+                f"route={route_id}, start_node={item['event_start_node'].index}, "
+                f"reasons={','.join(reasons)}, "
+                f"demand={combined_route.total_demand():.2f}/{capacity_limit:.2f}, "
+                f"duration={combined_route.total_duration():.2f}/{duration_limit_text}, "
+                f"pending_customers={len(future_route.customers)}"
+            )
             all_routes_feasible = False
-            break
 
     is_within_threshold = (
         new_cluster_cost <= original_cluster_cost * cluster_degradation_threshold
@@ -779,6 +859,10 @@ def reoptimize_intra_cluster(
         return None, None
 
     if not all_routes_feasible:
+        if infeasible_diagnostics:
+            print("Stage 2 infeasible diagnostics:")
+            for detail in infeasible_diagnostics:
+                print(f"  - {detail}")
         print(f"Stage 2 rejected (infeasible).")
         return None, None
 
@@ -1137,8 +1221,7 @@ def run_simulation(
     failures: List[FailureEvent],
     instance_name: str,
     algorithm: MDVRPAlgorithm,
-    reroute_degradation_threshold: float = 1.20,
-    cluster_degradation_threshold: float = 1.05,
+    cfg: AppConfig,
 ):
     """
     Run event-driven simulation with dynamic rerouting on edge failures.
@@ -1153,8 +1236,8 @@ def run_simulation(
         Instance identifier for output files.
     algorithm : MDVRPAlgorithm
         Algorithm to use for rerouting.
-    cluster_degradation_threshold : float
-        Stage-2 cluster acceptance limit for total cost.
+    cfg : AppConfig
+        Global typed configuration loaded by load_config().
         
     Returns
     -------
@@ -1195,6 +1278,7 @@ def run_simulation(
     unserved_no_active_route_ids: set[int] = set()
     unserved_no_route_without_broken_edge_ids: set[int] = set()
     unserved_mixed_reason_ids: set[int] = set()
+    runtime_settings = _build_runtime_settings(cfg)
 
     # Main simulation loop: process events in chronological order
     while not event_queue.is_empty():
@@ -1225,8 +1309,7 @@ def run_simulation(
                 instance_name,
                 reroute_count,
                 blocked_edges,
-                reroute_degradation_threshold,
-                cluster_degradation_threshold,
+                runtime_settings,
                 forced_unserved_customer_ids,
                 unserved_no_active_route_ids,
                 unserved_no_route_without_broken_edge_ids,
@@ -1365,6 +1448,23 @@ def run_simulation(
     duration_feasible = len(duration_violations) == 0
     broken_edge_feasible = len(routes_using_broken) == 0
 
+    def _print_violation_routes(
+        violations: list[dict[str, object]],
+    ) -> None:
+        """Print every violating route with excess/limit details."""
+        if not violations:
+            return
+        print("  -> Violating Routes  :")
+        for item in sorted(violations, key=lambda entry: int(entry["route_id"])):
+            print(
+                "     - "
+                f"route={int(item['route_id'])}, "
+                f"depot={int(item['depot_index'])}, "
+                f"customers={int(item['customers_count'])}, "
+                f"excess/limit={float(item['excess']):.2f}/{float(item['limit']):.2f} "
+                f"({float(item['excess_percent']):+.2f}%)"
+            )
+
     capacity_forced_customers = sum(int(item["customers_count"]) for item in capacity_violations)
     capacity_total_excess = sum(float(item["excess"]) for item in capacity_violations)
     capacity_total_limit = sum(float(item["limit"]) for item in capacity_violations)
@@ -1479,6 +1579,7 @@ def run_simulation(
             f"excess/limit={duration_total_excess:.2f}/{duration_total_limit:.2f} "
             f"({duration_excess_vs_limit_pct:+.2f}%)"
         )
+        _print_violation_routes(duration_violations)
         duration_hero_route = max(
             duration_violations,
             key=lambda item: (item["excess"], item["customers_count"], -item["route_id"]),
@@ -1498,6 +1599,7 @@ def run_simulation(
             f"excess/limit={capacity_total_excess:.2f}/{capacity_total_limit:.2f} "
             f"({capacity_excess_vs_limit_pct:+.2f}%)"
         )
+        _print_violation_routes(capacity_violations)
         capacity_hero_route = max(
             capacity_violations,
             key=lambda item: (item["excess"], item["customers_count"], -item["route_id"]),
@@ -1605,8 +1707,7 @@ def _handle_disaster(
     instance_name: str,
     reroute_count: int,
     blocked_edges: set[tuple[int, int]],
-    reroute_degradation_threshold: float,
-    cluster_degradation_threshold: float,
+    runtime_settings: SimulationRuntimeSettings,
     forced_unserved_customer_ids: set[int],
     unserved_no_active_route_ids: set[int],
     unserved_no_route_without_broken_edge_ids: set[int],
@@ -1652,13 +1753,11 @@ def _handle_disaster(
         affected_vehicle_state, current_node, on_broken_edge, leg, current_time
     )
 
-    simulation_cfg = getattr(getattr(algorithm, "cfg", None), "simulation", None)
-    penalty_overcapacity_per_unit = float(
-        getattr(simulation_cfg, "penalty_overcapacity_per_unit", 100000.0)
-    )
-    penalty_overtime_per_minute = float(
-        getattr(simulation_cfg, "penalty_overtime_per_minute", 50000.0)
-    )
+    reroute_degradation_threshold = runtime_settings.reroute_degradation_threshold
+    cluster_degradation_threshold = runtime_settings.cluster_degradation_threshold
+    local_search_max_iterations = runtime_settings.local_search_max_iterations
+    penalty_overcapacity_per_unit = runtime_settings.penalty_overcapacity_per_unit
+    penalty_overtime_per_minute = runtime_settings.penalty_overtime_per_minute
 
     # Pending pool for optimization (ordered and commitment-aware).
     pending_customers = build_pending_customers_list(affected_vehicle_state, fixed_next_customer)
@@ -1684,12 +1783,13 @@ def _handle_disaster(
     historical_wasted_duration = original_route.wasted_duration + wasted_travel_time
     historical_wasted_distance = original_route.wasted_distance + wasted_travel_distance
 
-    baseline_route_duration = Route(
+    tolerance_baseline_route = Route(
         depot=original_route.depot,
         customers=list(original_route.customers),
         wasted_duration=historical_wasted_duration,
         wasted_distance=historical_wasted_distance,
-    ).total_duration()
+    )
+    baseline_route_duration = tolerance_baseline_route.total_duration()
     accepted_stage: str | None = None
     accepted_stage_key: str | None = None
     stage3_failure_hero_route_ids: list[int] = []
@@ -1710,7 +1810,7 @@ def _handle_disaster(
         historical_wasted_duration=historical_wasted_duration,
         historical_wasted_distance=historical_wasted_distance,
         original_route_cost=original_route_cost,
-        original_route=original_route,
+        original_route=tolerance_baseline_route,
         reroute_degradation_threshold=reroute_degradation_threshold,
         blocked_edges=blocked_edges,
     )
@@ -1721,6 +1821,7 @@ def _handle_disaster(
             original_route=original_route,
             start_node=event_start_node,
             blocked_edges=blocked_edges,
+            blocked_edge_customers=stage1_customers,
         )
         uses_broken_edge = _path_uses_blocked_edge(
             event_start_node,
@@ -1747,6 +1848,7 @@ def _handle_disaster(
                 original_route=item["state"].route,
                 start_node=item["event_start_node"],
                 blocked_edges=blocked_edges,
+                blocked_edge_customers=data["future_route"].customers,
             ):
                 print(
                     "Stage 2 fallback rejected "
@@ -1787,6 +1889,7 @@ def _handle_disaster(
             affected_route_id=affected_route,
             current_time=current_time,
             blocked_edges=blocked_edges,
+            local_search_max_iterations=10000,
             cluster_degradation_threshold=cluster_degradation_threshold,
             event_start_node=event_start_node,
             reroute_start_time=reroute_start_time,

@@ -3,6 +3,10 @@
 from dataclasses import dataclass, field
 from typing import List
 
+from utils.defaults import (
+    DEFAULT_SIMULATION_PENALTY_OVERCAPACITY_PER_UNIT,
+    DEFAULT_SIMULATION_PENALTY_OVERTIME_PER_MINUTE,
+)
 from utils.metrics import euclidean_distance
 
 
@@ -88,8 +92,8 @@ class Route:
 
     def fitness_cost(
         self,
-        penalty_overcapacity_per_unit: float = 100000.0,
-        penalty_overtime_per_minute: float = 50000.0,
+        penalty_overcapacity_per_unit: float = DEFAULT_SIMULATION_PENALTY_OVERCAPACITY_PER_UNIT,
+        penalty_overtime_per_minute: float = DEFAULT_SIMULATION_PENALTY_OVERTIME_PER_MINUTE,
     ) -> float:
         """Soft-constraint objective used by Stage 3 single-pass evaluation."""
         return (

@@ -1,38 +1,34 @@
-"""
+﻿"""
 Prins (2004) local search for VRP.
 
-Provides route-cost helpers and the 9-move local search (M1–M9) that
-improves a multi-route VRP solution by scanning all O(n²) customer pairs
+Provides route-cost helpers and the 9-move local search (M1-M9) that
+improves a multi-route VRP solution by scanning all O(n^2) customer pairs
 and applying the first improving move found, then restarting.
 """
 
+from dataclasses import dataclass
+import math
 from typing import Callable, List
 
+from algorithms.ga_split import bellman_split
 from core.entities import Customer, Depot, Route
+from utils.defaults import DEFAULT_GA_LOCAL_SEARCH_MAX_ITERATIONS
 
 
-_LOCAL_SEARCH_CONTEXT: tuple[list[list[Customer]], list[float], list[float]] | None = None
+@dataclass(frozen=True)
+class _LocalSearchContext:
+    """Runtime state injected once per local-search run."""
+
+    consumed_capacity: list[float]
+    consumed_duration: list[float]
+    executed_last_nodes: list[Depot | Customer]
 
 
-def _resolve_consumed_from_context(
-    original_route: List[Customer] | None,
-) -> tuple[float, float]:
-    """Resolve consumed capacity/duration for the route being evaluated."""
-    if original_route is None or _LOCAL_SEARCH_CONTEXT is None:
-        return 0.0, 0.0
-
-    routes_ctx, consumed_capacity_ctx, consumed_duration_ctx = _LOCAL_SEARCH_CONTEXT
-    for idx, route_ctx in enumerate(routes_ctx):
-        if route_ctx is original_route:
-            capacity = consumed_capacity_ctx[idx] if idx < len(consumed_capacity_ctx) else 0.0
-            duration = consumed_duration_ctx[idx] if idx < len(consumed_duration_ctx) else 0.0
-            return capacity, duration
-
-    return 0.0, 0.0
+_LOCAL_SEARCH_CONTEXT: _LocalSearchContext | None = None
 
 
 def _route_cost(route: List[Customer], depot: Depot, dist_fn: Callable[[int, int], float]) -> float:
-    """Total round-trip cost: depot → route[0] → ... → route[-1] → depot."""
+    """Total round-trip cost: depot -> route[0] -> ... -> route[-1] -> depot."""
     if not route:
         return 0.0
     cost = dist_fn(depot.index, route[0].index)
@@ -65,13 +61,33 @@ def _is_route_feasible(
     dist_fn: Callable[[int, int], float],
     original_route: List[Customer] | None = None,
     *,
-    consumed_capacity: float | None = None,
-    consumed_duration: float | None = None,
+    route_idx: int | None = None,
 ) -> bool:
     """Check route constraints while tolerating historical violations from original_route."""
-    context_capacity, context_duration = _resolve_consumed_from_context(original_route)
-    consumed_capacity = context_capacity if consumed_capacity is None else float(consumed_capacity)
-    consumed_duration = context_duration if consumed_duration is None else float(consumed_duration)
+    if route_idx is not None and _LOCAL_SEARCH_CONTEXT is not None:
+        if route_idx < len(_LOCAL_SEARCH_CONTEXT.consumed_capacity):
+            consumed_capacity = _LOCAL_SEARCH_CONTEXT.consumed_capacity[route_idx]
+            consumed_duration = (
+                _LOCAL_SEARCH_CONTEXT.consumed_duration[route_idx]
+                if route_idx < len(_LOCAL_SEARCH_CONTEXT.consumed_duration)
+                else 0.0
+            )
+            context_last_node = (
+                _LOCAL_SEARCH_CONTEXT.executed_last_nodes[route_idx]
+                if route_idx < len(_LOCAL_SEARCH_CONTEXT.executed_last_nodes)
+                else None
+            )
+        else:
+            consumed_capacity = 0.0
+            consumed_duration = 0.0
+            context_last_node = None
+    else:
+        # When running outside simulation, there is no per-route runtime context.
+        consumed_capacity = 0.0
+        consumed_duration = 0.0
+        context_last_node = None
+
+    actual_start = context_last_node if context_last_node is not None else depot
 
     tolerated_capacity = max(0.0, depot.max_capacity - consumed_capacity)
     tolerated_duration = depot.max_duration
@@ -81,14 +97,18 @@ def _is_route_feasible(
     if original_route is not None:
         tolerated_capacity = max(tolerated_capacity, sum(c.demand for c in original_route))
         if depot.max_duration > 0:
-            original_travel = _route_cost(original_route, depot, dist_fn)
+            original_travel = _open_path_cost(original_route, actual_start, depot, dist_fn)
             original_service = sum(c.service_time for c in original_route)
             tolerated_duration = max(tolerated_duration, original_travel + original_service)
 
     if sum(c.demand for c in route) > tolerated_capacity:
         return False
+
+    travel = _open_path_cost(route, actual_start, depot, dist_fn)
+    if math.isinf(travel):
+        return False
+
     if tolerated_duration > 0:
-        travel = _route_cost(route, depot, dist_fn)
         service = sum(c.service_time for c in route)
         if travel + service > tolerated_duration:
             return False
@@ -181,19 +201,21 @@ def local_search(
     routes: List[Route | List[Customer]],
     depot: Depot,
     dist_fn: Callable[[int, int], float],
+    local_search_max_iterations: int = DEFAULT_GA_LOCAL_SEARCH_MAX_ITERATIONS,
     is_stage_2: bool = False,
-    apply_frozen_prefix: bool = False,
+    frozen_route_indices: set[int] | None = None,
     executed_capacity_by_route: List[float] | None = None,
     executed_duration_by_route: List[float] | None = None,
+    executed_last_nodes: List[Depot | Customer] | None = None,
 ) -> List[List[Customer]]:
     """
     Prins (2004) 9-move local search over a multi-route VRP solution.
 
     Operates on mutable lists of customers (routes).  The depot is implicit
-    at the start and end of every route.  Scans all O(n²) (u, v) customer
+    at the start and end of every route.  Scans all O(n^2) (u, v) customer
     pairs and applies the first improving move found, then restarts.  Moves
-    M1–M6 are inter/intra-route relocate/swap moves; M7 is intra-route 2-opt;
-    M8–M9 are inter-route 2-opt variants.
+    M1-M6 are inter/intra-route relocate/swap moves; M7 is intra-route 2-opt;
+    M8-M9 are inter-route 2-opt variants.
 
     Empty routes are removed at the end.
 
@@ -208,12 +230,14 @@ def local_search(
         O(1) pre-computed distance callable.
     is_stage_2:
         Enable VND phase control (INTER -> INTRA) for Stage 2 cluster reopt.
-    apply_frozen_prefix:
-        Protect the first customer of each route.
+    frozen_route_indices:
+        Route indices whose first customer must remain fixed during local search.
     executed_capacity_by_route:
         Capacity already consumed by each route prefix before optimization.
     executed_duration_by_route:
         Duration already consumed by each route prefix before optimization.
+    executed_last_nodes:
+        Real vehicle positions at the start of each pending suffix.
 
     Returns
     -------
@@ -230,6 +254,8 @@ def local_search(
             normalized_routes.append(list(route))
     routes = normalized_routes
 
+    local_search_max_iterations = max(1, local_search_max_iterations)
+
     consumed_capacity = [0.0] * len(routes)
     if executed_capacity_by_route is not None:
         for idx, value in enumerate(executed_capacity_by_route[: len(routes)]):
@@ -240,8 +266,17 @@ def local_search(
         for idx, value in enumerate(executed_duration_by_route[: len(routes)]):
             consumed_duration[idx] = float(value)
 
+    real_start_nodes: list[Depot | Customer] = [depot] * len(routes)
+    if executed_last_nodes is not None:
+        for idx, node in enumerate(executed_last_nodes[: len(routes)]):
+            real_start_nodes[idx] = node
+
     global _LOCAL_SEARCH_CONTEXT
-    _LOCAL_SEARCH_CONTEXT = (routes, consumed_capacity, consumed_duration)
+    _LOCAL_SEARCH_CONTEXT = _LocalSearchContext(
+        consumed_capacity=consumed_capacity,
+        consumed_duration=consumed_duration,
+        executed_last_nodes=real_start_nodes,
+    )
 
     def _prev(route: List[Customer], pos: int) -> int:
         """Index of node before route[pos]; returns depot.index if pos == 0."""
@@ -253,13 +288,16 @@ def local_search(
 
     current_phase = "INTER" if is_stage_2 else "ALL"
     improved = True
+    iterations = 0
+    while iterations < local_search_max_iterations:
+        if not improved:
+            if is_stage_2 and current_phase == "INTER":
+                current_phase = "INTRA"
+                improved = True
+            else:
+                break
 
-    while improved or (is_stage_2 and current_phase == "INTER"):
-        if not improved and is_stage_2 and current_phase == "INTER":
-            current_phase = "INTRA"
-            improved = True
-            continue
-
+        iterations += 1
         improved = False
         n_routes = len(routes)
         d = dist_fn  # alias for brevity
@@ -275,7 +313,11 @@ def local_search(
                 for u_idx in range(len(ru)):
                     if improved:
                         break
-                    if apply_frozen_prefix and u_idx == 0:
+                    if (
+                        frozen_route_indices is not None
+                        and ru_idx in frozen_route_indices
+                        and u_idx == 0
+                    ):
                         continue
                     u = ru[u_idx]
                     x = ru[u_idx + 1] if u_idx + 1 < len(ru) else depot
@@ -311,7 +353,7 @@ def local_search(
                                     new_r = [c for k, c in enumerate(ru) if c is not u]
                                     insert_pos = next(k for k, c in enumerate(new_r) if c is v) + 1
                                     new_r.insert(insert_pos, u)
-                                    if _is_route_feasible(new_r, depot, dist_fn, original_route=ru):
+                                    if _is_route_feasible(new_r, depot, dist_fn, original_route=ru, route_idx=ru_idx):
                                         routes[ru_idx] = new_r
                                         improved = True
                                         break
@@ -319,8 +361,8 @@ def local_search(
                                     new_ru = [c for k, c in enumerate(routes[ru_idx]) if k != u_idx]
                                     new_rv = list(routes[rv_idx])
                                     new_rv.insert(v_idx + 1, u)
-                                    if (_is_route_feasible(new_ru, depot, dist_fn, original_route=ru) and
-                                        _is_route_feasible(new_rv, depot, dist_fn, original_route=rv)):
+                                    if (_is_route_feasible(new_ru, depot, dist_fn, original_route=ru, route_idx=ru_idx) and
+                                        _is_route_feasible(new_rv, depot, dist_fn, original_route=rv, route_idx=rv_idx)):
                                         routes[ru_idx] = new_ru
                                         routes[rv_idx] = new_rv
                                         improved = True
@@ -349,7 +391,7 @@ def local_search(
                                     insert_pos = next(k for k, c in enumerate(new_r) if c is v) + 1
                                     new_r.insert(insert_pos, x)
                                     new_r.insert(insert_pos, u)
-                                    if _is_route_feasible(new_r, depot, dist_fn, original_route=ru):
+                                    if _is_route_feasible(new_r, depot, dist_fn, original_route=ru, route_idx=ru_idx):
                                         routes[ru_idx] = new_r
                                         improved = True
                                         break
@@ -358,8 +400,8 @@ def local_search(
                                     new_rv = list(rv)
                                     new_rv.insert(v_idx + 1, x)
                                     new_rv.insert(v_idx + 1, u)
-                                    if (_is_route_feasible(new_ru, depot, dist_fn, original_route=ru) and
-                                        _is_route_feasible(new_rv, depot, dist_fn, original_route=rv)):
+                                    if (_is_route_feasible(new_ru, depot, dist_fn, original_route=ru, route_idx=ru_idx) and
+                                        _is_route_feasible(new_rv, depot, dist_fn, original_route=rv, route_idx=rv_idx)):
                                         routes[ru_idx] = new_ru
                                         routes[rv_idx] = new_rv
                                         improved = True
@@ -387,8 +429,8 @@ def local_search(
                                     new_r = [c for k, c in enumerate(ru) if k not in (u_idx, u_idx + 1)]
                                     insert_pos = next(k for k, c in enumerate(new_r) if c is v) + 1
                                     new_r.insert(insert_pos, u)  # insert u first (will be after x)
-                                    new_r.insert(insert_pos, x)  # insert x at same pos → [v, x, u, ...]
-                                    if _is_route_feasible(new_r, depot, dist_fn, original_route=ru):
+                                    new_r.insert(insert_pos, x)  # insert x at same pos -> [v, x, u, ...]
+                                    if _is_route_feasible(new_r, depot, dist_fn, original_route=ru, route_idx=ru_idx):
                                         routes[ru_idx] = new_r
                                         improved = True
                                         break
@@ -396,9 +438,9 @@ def local_search(
                                     new_ru = [c for k, c in enumerate(ru) if k not in (u_idx, u_idx + 1)]
                                     new_rv = list(rv)
                                     new_rv.insert(v_idx + 1, u)  # insert u first (will be after x)
-                                    new_rv.insert(v_idx + 1, x)  # insert x at same pos → [v, x, u, ...]
-                                    if (_is_route_feasible(new_ru, depot, dist_fn, original_route=ru) and
-                                        _is_route_feasible(new_rv, depot, dist_fn, original_route=rv)):
+                                    new_rv.insert(v_idx + 1, x)  # insert x at same pos -> [v, x, u, ...]
+                                    if (_is_route_feasible(new_ru, depot, dist_fn, original_route=ru, route_idx=ru_idx) and
+                                        _is_route_feasible(new_rv, depot, dist_fn, original_route=rv, route_idx=rv_idx)):
                                         routes[ru_idx] = new_ru
                                         routes[rv_idx] = new_rv
                                         improved = True
@@ -407,13 +449,17 @@ def local_search(
                         if improved:
                             break
 
-                        skip_swap = apply_frozen_prefix and v_idx == 0
+                        skip_swap = (
+                            frozen_route_indices is not None
+                            and rv_idx in frozen_route_indices
+                            and v_idx == 0
+                        )
                         if skip_swap:
                             continue
 
                         # M4: swap u and v
                         if ru_idx == rv_idx and abs(u_idx - v_idx) == 1:
-                            # Adjacent same-route: the shared edge u↔v cancels (symmetric distances).
+                            # Adjacent same-route: the shared edge u<->v cancels (symmetric distances).
                             # gain = d(p, lo) + d(hi, q) - d(p, hi) - d(lo, q)
                             lo, hi = (u_idx, v_idx) if u_idx < v_idx else (v_idx, u_idx)
                             lo_c, hi_c = ru[lo], ru[hi]
@@ -427,7 +473,7 @@ def local_search(
                                 new_r = list(ru)
                                 new_r[lo] = hi_c
                                 new_r[hi] = lo_c
-                                if _is_route_feasible(new_r, depot, dist_fn, original_route=ru):
+                                if _is_route_feasible(new_r, depot, dist_fn, original_route=ru, route_idx=ru_idx):
                                     routes[ru_idx] = new_r
                                     improved = True
                                     break
@@ -449,7 +495,7 @@ def local_search(
                                     new_r = list(ru)
                                     new_r[u_idx] = v
                                     new_r[v_idx] = u
-                                    if _is_route_feasible(new_r, depot, dist_fn, original_route=ru):
+                                    if _is_route_feasible(new_r, depot, dist_fn, original_route=ru, route_idx=ru_idx):
                                         routes[ru_idx] = new_r
                                         improved = True
                                         break
@@ -458,8 +504,8 @@ def local_search(
                                     new_rv = list(rv)
                                     new_ru[u_idx] = v
                                     new_rv[v_idx] = u
-                                    if (_is_route_feasible(new_ru, depot, dist_fn, original_route=ru) and
-                                        _is_route_feasible(new_rv, depot, dist_fn, original_route=rv)):
+                                    if (_is_route_feasible(new_ru, depot, dist_fn, original_route=ru, route_idx=ru_idx) and
+                                        _is_route_feasible(new_rv, depot, dist_fn, original_route=rv, route_idx=rv_idx)):
                                         routes[ru_idx] = new_ru
                                         routes[rv_idx] = new_rv
                                         improved = True
@@ -469,11 +515,15 @@ def local_search(
                             break
 
                         # M5: swap (u, x) with v
-                        # v IS x (v_idx == u_idx+1 in same route) → no-op, skip.
+                        # v IS x (v_idx == u_idx+1 in same route) -> no-op, skip.
                         # Two adjacent same-route cases need corrected gain formulas because
                         # boundary nodes coincide with x or u, breaking the general 8-term formula.
                         if isinstance(x, Customer) and not (ru_idx == rv_idx and v_idx == u_idx + 1):
-                            if apply_frozen_prefix and v_idx == 0:
+                            if (
+                                frozen_route_indices is not None
+                                and rv_idx in frozen_route_indices
+                                and v_idx == 0
+                            ):
                                 continue
                             
                             u_prev = _prev(ru, u_idx)
@@ -482,7 +532,7 @@ def local_search(
                             v_next = _next(rv, v_idx)
 
                             if ru_idx == rv_idx and v_idx == u_idx + 2:
-                                # Route: [..., p, u, x, v, q, ...] → [..., p, v, u, x, q, ...]
+                                # Route: [..., p, u, x, v, q, ...] -> [..., p, v, u, x, q, ...]
                                 # d(u,x) cancels; v_prev==x so general formula double-counts d(x,v).
                                 p, q = u_prev, v_next
                                 gain = (
@@ -490,7 +540,7 @@ def local_search(
                                     - d(p, v.index) - d(v.index, u.index) - d(x.index, q)
                                 )
                             elif ru_idx == rv_idx and v_idx == u_idx - 1:
-                                # Route: [..., p, v, u, x, q, ...] → [..., p, u, x, v, q, ...]
+                                # Route: [..., p, v, u, x, q, ...] -> [..., p, u, x, v, q, ...]
                                 # d(u,x) cancels; v_next==u so general formula double-counts d(v,u).
                                 p, q = v_prev, x_next
                                 gain = (
@@ -522,7 +572,7 @@ def local_search(
                                         adj_u = u_idx + 1
                                         new_r[adj_u] = v
                                         new_r.pop(adj_u + 1)   # remove x
-                                    if _is_route_feasible(new_r, depot, dist_fn, original_route=ru):
+                                    if _is_route_feasible(new_r, depot, dist_fn, original_route=ru, route_idx=ru_idx):
                                         routes[ru_idx] = new_r
                                         improved = True
                                         break
@@ -533,8 +583,8 @@ def local_search(
                                     new_rv = list(rv)
                                     new_rv[v_idx] = u
                                     new_rv.insert(v_idx + 1, x)
-                                    if (_is_route_feasible(new_ru, depot, dist_fn, original_route=ru) and
-                                        _is_route_feasible(new_rv, depot, dist_fn, original_route=rv)):
+                                    if (_is_route_feasible(new_ru, depot, dist_fn, original_route=ru, route_idx=ru_idx) and
+                                        _is_route_feasible(new_rv, depot, dist_fn, original_route=rv, route_idx=rv_idx)):
                                         routes[ru_idx] = new_ru
                                         routes[rv_idx] = new_rv
                                         improved = True
@@ -545,12 +595,16 @@ def local_search(
 
                         # M6: swap (u, x) with (v, y)
                         # Same-route pairs overlap when |v_idx - u_idx| <= 1:
-                        #   v_idx == u_idx+1 → v IS x; v_idx == u_idx-1 → y IS u. Skip both.
+                        #   v_idx == u_idx+1 -> v IS x; v_idx == u_idx-1 -> y IS u. Skip both.
                         # Adjacent non-overlapping pairs (distance == 2) share a boundary node
                         # with the other pair, breaking the general gain formula.
                         _m6_overlap = ru_idx == rv_idx and abs(v_idx - u_idx) <= 1
                         if isinstance(x, Customer) and isinstance(y, Customer) and not _m6_overlap:
-                            if apply_frozen_prefix and v_idx == 0:
+                            if (
+                                frozen_route_indices is not None
+                                and rv_idx in frozen_route_indices
+                                and v_idx == 0
+                            ):
                                 continue
 
                             u_prev = _prev(ru, u_idx)
@@ -559,16 +613,16 @@ def local_search(
                             y_next = _next(rv, v_idx + 1)
 
                             if ru_idx == rv_idx and v_idx == u_idx + 2:
-                                # [p, u, x, v, y, q] → [p, v, y, u, x, q]
-                                # x_next==v and v_prev==x → d(x,v) double-counted
+                                # [p, u, x, v, y, q] -> [p, v, y, u, x, q]
+                                # x_next==v and v_prev==x -> d(x,v) double-counted
                                 p, q = u_prev, y_next
                                 gain = (
                                     d(p, u.index) + d(x.index, v.index) + d(y.index, q)
                                     - d(p, v.index) - d(y.index, u.index) - d(x.index, q)
                                 )
                             elif ru_idx == rv_idx and v_idx == u_idx - 2:
-                                # [p, v, y, u, x, q] → [p, u, x, v, y, q]
-                                # u_prev==y and y_next==u → d(y,u) double-counted
+                                # [p, v, y, u, x, q] -> [p, u, x, v, y, q]
+                                # u_prev==y and y_next==u -> d(y,u) double-counted
                                 p, q = v_prev, x_next
                                 gain = (
                                     d(p, v.index) + d(y.index, u.index) + d(x.index, q)
@@ -585,13 +639,13 @@ def local_search(
 
                             if gain > 1e-9:
                                 if ru_idx == rv_idx:
-                                    # Pairs don't overlap → 4 direct index assignments.
+                                    # Pairs don't overlap -> 4 direct index assignments.
                                     new_r = list(ru)
                                     new_r[u_idx] = v
                                     new_r[u_idx + 1] = y
                                     new_r[v_idx] = u
                                     new_r[v_idx + 1] = x
-                                    if _is_route_feasible(new_r, depot, dist_fn, original_route=ru):
+                                    if _is_route_feasible(new_r, depot, dist_fn, original_route=ru, route_idx=ru_idx):
                                         routes[ru_idx] = new_r
                                         improved = True
                                         break
@@ -602,8 +656,8 @@ def local_search(
                                     new_rv = list(rv)
                                     new_rv[v_idx] = u
                                     new_rv[v_idx + 1] = x
-                                    if (_is_route_feasible(new_ru, depot, dist_fn, original_route=ru) and
-                                        _is_route_feasible(new_rv, depot, dist_fn, original_route=rv)):
+                                    if (_is_route_feasible(new_ru, depot, dist_fn, original_route=ru, route_idx=ru_idx) and
+                                        _is_route_feasible(new_rv, depot, dist_fn, original_route=rv, route_idx=rv_idx)):
                                         routes[ru_idx] = new_ru
                                         routes[rv_idx] = new_rv
                                         improved = True
@@ -613,9 +667,9 @@ def local_search(
                             break
 
                         # M7: 2-opt within same route
-                        # Replace edges (u→x) and (v→y) with (u→v) and (x→y).
+                        # Replace edges (u->x) and (v->y) with (u->v) and (x->y).
                         # Reverses segment route[u_idx+1 : v_idx+1].
-                        # Guard: u_idx+1 < v_idx ensures non-degenerate (≥1 node reversed)
+                        # Guard: u_idx+1 < v_idx ensures non-degenerate (>=1 node reversed)
                         # and guarantees x = ru[u_idx+1] is a Customer (not depot).
                         if ru_idx == rv_idx and u_idx + 1 < v_idx:
                             gain = (
@@ -625,7 +679,7 @@ def local_search(
                             if gain > 1e-9:
                                 new_r = list(ru)
                                 new_r[u_idx + 1: v_idx + 1] = new_r[u_idx + 1: v_idx + 1][::-1]
-                                if _is_route_feasible(new_r, depot, dist_fn, original_route=ru):
+                                if _is_route_feasible(new_r, depot, dist_fn, original_route=ru, route_idx=ru_idx):
                                     routes[ru_idx] = new_r
                                     improved = True
                                     break
@@ -634,15 +688,21 @@ def local_search(
                             break
 
                         # M8: inter-route 2-opt (reconnect)
-                        # T(u) ≠ T(v): different routes only.
-                        # Replace edges (u→x) and (v→y) with (u→v) and (x→y).
+                        # T(u) != T(v): different routes only.
+                        # Replace edges (u->x) and (v->y) with (u->v) and (x->y).
                         # new_ru = ru[:u+1] + reversed(rv[:v+1])
                         # new_rv = ru[u+1:] + rv[v+1:]
                         # Use actual route-cost delta to avoid gain-formula oscillation:
                         # the edge-delta formula is symmetric so scanning (v,u) after (u,v)
                         # reports the same positive gain and reverses the move endlessly.
                         if ru_idx < rv_idx:
-                            if apply_frozen_prefix:
+                            if (
+                                frozen_route_indices is not None
+                                and (
+                                    ru_idx in frozen_route_indices
+                                    or rv_idx in frozen_route_indices
+                                )
+                            ):
                                 continue
                             
                             prefix_u = ru[: u_idx + 1]
@@ -654,8 +714,8 @@ def local_search(
                             cost_before = _route_cost(ru, depot, dist_fn) + _route_cost(rv, depot, dist_fn)
                             cost_after = _route_cost(new_ru, depot, dist_fn) + _route_cost(new_rv, depot, dist_fn)
                             if cost_before - cost_after > 1e-9:
-                                if (_is_route_feasible(new_ru, depot, dist_fn, original_route=ru) and
-                                    _is_route_feasible(new_rv, depot, dist_fn, original_route=rv)):
+                                if (_is_route_feasible(new_ru, depot, dist_fn, original_route=ru, route_idx=ru_idx) and
+                                    _is_route_feasible(new_rv, depot, dist_fn, original_route=rv, route_idx=rv_idx)):
                                     routes[ru_idx] = new_ru
                                     routes[rv_idx] = new_rv
                                     improved = True
@@ -665,8 +725,8 @@ def local_search(
                             break
 
                         # M9: inter-route tail-swap
-                        # T(u) ≠ T(v): different routes only.
-                        # Replace edges (u→x) and (v→y) with (u→y) and (v→x).
+                        # T(u) != T(v): different routes only.
+                        # Replace edges (u->x) and (v->y) with (u->y) and (v->x).
                         # new_ru = ru[:u+1] + rv[v+1:]  (u's prefix + v's suffix)
                         # new_rv = rv[:v+1] + ru[u+1:]  (v's prefix + u's suffix)
                         # Gain is exact (no reversals): d(u,x)+d(v,y)-d(u,y)-d(v,x).
@@ -680,14 +740,40 @@ def local_search(
                             if gain > 1e-9:
                                 new_ru = ru[: u_idx + 1] + rv[v_idx + 1:]
                                 new_rv = rv[: v_idx + 1] + ru[u_idx + 1:]
-                                if (_is_route_feasible(new_ru, depot, dist_fn, original_route=ru) and
-                                    _is_route_feasible(new_rv, depot, dist_fn, original_route=rv)):
+                                if (_is_route_feasible(new_ru, depot, dist_fn, original_route=ru, route_idx=ru_idx) and
+                                    _is_route_feasible(new_rv, depot, dist_fn, original_route=rv, route_idx=rv_idx)):
                                     routes[ru_idx] = new_ru
                                     routes[rv_idx] = new_rv
                                     improved = True
                                     break
 
-    # Remove empty routes and return
-    result = [r for r in routes if r]
+        # After each improvement, re-run bellman_split on the flattened giant
+        # tour so the vehicle partition is re-optimised before the next LS pass.
+        if improved:
+            if is_stage_2:
+                # Stage-2 route matching is anchored by frozen prefixes.
+                # Re-splitting can merge/split routes and drop those anchors,
+                # producing false "prefix mismatch" rejections upstream.
+                continue
+
+            flat = [c for route in routes for c in route]
+            if is_stage_2:
+                # Stage 2 may temporarily rely on tolerance-aware feasibility;
+                # keep the current partition if strict split becomes impossible.
+                try:
+                    routes = [list(r.customers) for r in bellman_split(flat, depot, dist_fn)]
+                except ValueError:
+                    pass
+            else:
+                routes = [list(r.customers) for r in bellman_split(flat, depot, dist_fn)]
+
+    # Remove empty routes and return (except in Stage 2, where physical
+    # vehicle index mapping is strictly required).
+    if is_stage_2:
+        result = routes
+    else:
+        result = [r for r in routes if r]
+
     _LOCAL_SEARCH_CONTEXT = None
     return result
+

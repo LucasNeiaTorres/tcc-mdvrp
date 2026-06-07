@@ -11,6 +11,18 @@ from typing import Optional
 
 import yaml
 
+from utils.defaults import (
+    DEFAULT_GA_CLONE_DELTA,
+    DEFAULT_GA_LOCAL_SEARCH_MAX_ITERATIONS,
+    DEFAULT_GA_STAGNATION_FTOL,
+    DEFAULT_GA_STAGNATION_PERIOD,
+    DEFAULT_GA_TIME_LIMIT,
+    DEFAULT_SIMULATION_CLUSTER_DEGRADATION_THRESHOLD,
+    DEFAULT_SIMULATION_PENALTY_OVERCAPACITY_PER_UNIT,
+    DEFAULT_SIMULATION_PENALTY_OVERTIME_PER_MINUTE,
+    DEFAULT_SIMULATION_REROUTE_DEGRADATION_THRESHOLD,
+)
+
 
 @dataclass
 class CCBCConfig:
@@ -25,14 +37,19 @@ class GAConfig:
     n_gen: int
     seed: int
     mutation_prob: float
+    local_search_max_iterations: int = DEFAULT_GA_LOCAL_SEARCH_MAX_ITERATIONS
+    clone_delta: float = DEFAULT_GA_CLONE_DELTA
+    stagnation_period: int = DEFAULT_GA_STAGNATION_PERIOD
+    stagnation_ftol: float = DEFAULT_GA_STAGNATION_FTOL
+    time_limit: str = DEFAULT_GA_TIME_LIMIT
 
 
 @dataclass
 class SimulationConfig:
-    reroute_degradation_threshold: float = 1.20
-    cluster_degradation_threshold: float = 1.05
-    penalty_overcapacity_per_unit: float = 100000.0
-    penalty_overtime_per_minute: float = 50000.0
+    reroute_degradation_threshold: float = DEFAULT_SIMULATION_REROUTE_DEGRADATION_THRESHOLD
+    cluster_degradation_threshold: float = DEFAULT_SIMULATION_CLUSTER_DEGRADATION_THRESHOLD
+    penalty_overcapacity_per_unit: float = DEFAULT_SIMULATION_PENALTY_OVERCAPACITY_PER_UNIT
+    penalty_overtime_per_minute: float = DEFAULT_SIMULATION_PENALTY_OVERTIME_PER_MINUTE
 
 
 @dataclass
@@ -74,24 +91,44 @@ def load_config(path: Optional[str] = None) -> AppConfig:
             n_gen=int(ga_raw["n_gen"]),
             seed=int(ga_raw["seed"]),
             mutation_prob=float(ga_raw["mutation_prob"]),
+            local_search_max_iterations=int(
+                ga_raw.get(
+                    "local_search_max_iterations",
+                    DEFAULT_GA_LOCAL_SEARCH_MAX_ITERATIONS,
+                )
+            ),
+            clone_delta=float(ga_raw.get("clone_delta", DEFAULT_GA_CLONE_DELTA)),
+            stagnation_period=int(
+                ga_raw.get("stagnation_period", DEFAULT_GA_STAGNATION_PERIOD)
+            ),
+            stagnation_ftol=float(
+                ga_raw.get("stagnation_ftol", DEFAULT_GA_STAGNATION_FTOL)
+            ),
+            time_limit=str(ga_raw.get("time_limit", DEFAULT_GA_TIME_LIMIT)),
         ),
         simulation=SimulationConfig(
             reroute_degradation_threshold=float(
-                simulation_raw.get("reroute_degradation_threshold", 1.20)
+                simulation_raw.get(
+                    "reroute_degradation_threshold",
+                    DEFAULT_SIMULATION_REROUTE_DEGRADATION_THRESHOLD,
+                )
             ),
             cluster_degradation_threshold=float(
-                simulation_raw.get("cluster_degradation_threshold", 1.05)
+                simulation_raw.get(
+                    "cluster_degradation_threshold",
+                    DEFAULT_SIMULATION_CLUSTER_DEGRADATION_THRESHOLD,
+                )
             ),
             penalty_overcapacity_per_unit=float(
                 simulation_raw.get(
                     "penalty_overcapacity_per_unit",
-                    simulation_raw.get("penalty_overcapacity_per_unit", 100000.0),
+                    DEFAULT_SIMULATION_PENALTY_OVERCAPACITY_PER_UNIT,
                 )
             ),
             penalty_overtime_per_minute=float(
                 simulation_raw.get(
                     "penalty_overtime_per_minute",
-                    simulation_raw.get("penalty_overtime_per_minute", 50000.0),
+                    DEFAULT_SIMULATION_PENALTY_OVERTIME_PER_MINUTE,
                 )
             ),
         ),

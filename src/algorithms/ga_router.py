@@ -12,24 +12,39 @@ ga_problems     — RoutingProblem / DynamicRoutingProblem (pymoo)
 ga_operators    — HeuristicSampling + LSMutation (pymoo)
 """
 
-from typing import Callable, List
+from dataclasses import dataclass, field
+from typing import Callable, List, Tuple
 
 from pymoo.algorithms.soo.nonconvex.ga import GA
 from pymoo.operators.crossover.ox import OrderCrossover
 from pymoo.optimize import minimize
+from pymoo.termination import get_termination
+from pymoo.termination.collection import TerminationCollection
+from pymoo.termination.default import DefaultSingleObjectiveTermination
 
 from core.entities import Customer, Depot, Route
 from utils.config import GAConfig
 from algorithms.ga_split import bellman_split
 from algorithms.ga_problems import RoutingProblem, DynamicRoutingProblem
-from algorithms.ga_operators import HeuristicSampling, LSMutation
+from algorithms.ga_operators import HeuristicSampling, LSMutation, WellSpacedSurvival
+
+
+@dataclass
+class GADepotHistory:
+    depot_index: int
+    best: List[float] = field(default_factory=list)
+    mean: List[float] = field(default_factory=list)
+    std: List[float] = field(default_factory=list)
+    clones_removed: int = 0
+    stopped_early: bool = False
+
 
 def run_ga_routing(
     depot: Depot,
     customers: List[Customer],
     dist_fn: Callable[[int, int], float],
     cfg: GAConfig,
-) -> List[Route]:
+) -> Tuple[List[Route], GADepotHistory]:
     """
     Run GA to find the best visiting order for a depot's customers, then use
     the Bellman split to partition the giant tour into capacity-feasible routes.
@@ -47,13 +62,14 @@ def run_ga_routing(
 
     Returns
     -------
-    List of Routes covering all customers, one per vehicle.
+    Tuple of (routes, history) where routes cover all customers and history
+    holds per-generation best/mean/std fitness values.
     """
     if not customers:
-        return []
+        return [], GADepotHistory(depot_index=depot.index)
 
     if len(customers) == 1:
-        return [Route(depot=depot, customers=list(customers))]
+        return [Route(depot=depot, customers=list(customers))], GADepotHistory(depot_index=depot.index)
 
     problem = RoutingProblem(depot=depot, customers=customers, dist_fn=dist_fn)
 
@@ -71,20 +87,40 @@ def run_ga_routing(
             customers=customers,
             dist_fn=dist_fn,
             prob=cfg.mutation_prob,
+            local_search_max_iterations=cfg.local_search_max_iterations,
         ),
+        survival=WellSpacedSurvival(delta=cfg.clone_delta),
         eliminate_duplicates=True,
     )
 
     result = minimize(
         problem,
         algorithm,
-        termination=("n_gen", cfg.n_gen),
+        termination=TerminationCollection(
+            DefaultSingleObjectiveTermination(
+                ftol=cfg.stagnation_ftol,
+                period=cfg.stagnation_period,
+                n_max_gen=cfg.n_gen,
+            ),
+            get_termination("time", cfg.time_limit),
+        ),
         seed=cfg.seed,
-        verbose=False,
+        save_history=True,
+        verbose=True,
+    )
+
+    gens = [g.pop.get("F").flatten() for g in (result.history or [])]
+    history = GADepotHistory(
+        depot_index=depot.index,
+        best=[float(f.min()) for f in gens],
+        mean=[float(f.mean()) for f in gens],
+        std=[float(f.std()) for f in gens],
+        clones_removed=result.algorithm.survival.eliminated_count,
+        stopped_early=len(gens) < cfg.n_gen,
     )
 
     ordered_customers = [customers[i] for i in result.X.astype(int)]
-    return bellman_split(ordered_customers, depot, dist_fn)
+    return bellman_split(ordered_customers, depot, dist_fn), history
 
 
 def run_ga_reroute(
@@ -144,14 +180,23 @@ def run_ga_reroute(
             customers=pending_customers,
             dist_fn=dist_fn,
             prob=cfg.mutation_prob,
+            local_search_max_iterations=cfg.local_search_max_iterations,
         ),
+        survival=WellSpacedSurvival(delta=cfg.clone_delta),
         eliminate_duplicates=True,
     )
 
     result = minimize(
         problem,
         algorithm,
-        termination=("n_gen", cfg.n_gen),
+        termination=TerminationCollection(
+            DefaultSingleObjectiveTermination(
+                ftol=cfg.stagnation_ftol,
+                period=cfg.stagnation_period,
+                n_max_gen=cfg.n_gen,
+            ),
+            get_termination("time", cfg.time_limit),
+        ),
         seed=cfg.seed,
         verbose=False,
     )
