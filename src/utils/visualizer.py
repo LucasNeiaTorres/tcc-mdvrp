@@ -104,7 +104,7 @@ def visualize_instance(
     ax.legend(loc="upper right", fontsize=11)
     _style_ax(ax, title)
     plt.tight_layout()
-    plt.show()
+    plt.show(block=False)
 
 
 def visualize_solution(
@@ -120,7 +120,7 @@ def visualize_solution(
     ax.legend(loc="upper right", fontsize=9, ncol=2)
     _style_ax(ax, title)
     plt.tight_layout()
-    plt.show()
+    plt.show(block=False)
 
 
 def visualize_comparison(
@@ -147,7 +147,7 @@ def visualize_comparison(
         _style_ax(ax, title)
 
     plt.tight_layout()
-    plt.show()
+    plt.show(block=False)
 
 
 def visualize_ga_convergence(histories: List[GADepotHistory]) -> None:
@@ -185,4 +185,4 @@ def visualize_ga_convergence(histories: List[GADepotHistory]) -> None:
 
     fig.suptitle("GA Convergence per Depot", fontsize=13, fontweight="bold")
     plt.tight_layout()
-    plt.show()
+    plt.show(block=False)

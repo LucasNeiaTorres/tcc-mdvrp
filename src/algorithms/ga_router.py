@@ -16,6 +16,7 @@ from dataclasses import dataclass, field
 from typing import Callable, List, Tuple
 
 from pymoo.algorithms.soo.nonconvex.ga import GA
+from pymoo.core.callback import Callback
 from pymoo.operators.crossover.ox import OrderCrossover
 from pymoo.optimize import minimize
 from pymoo.termination import get_termination
@@ -29,6 +30,30 @@ from algorithms.ga_problems import RoutingProblem, DynamicRoutingProblem
 from algorithms.ga_operators import HeuristicSampling, LSMutation, WellSpacedSurvival
 
 
+class _ProgressCallback(Callback):
+    """Prints a compact progress line every `interval` generations."""
+
+    def __init__(self, depot_index: int, n_gen: int, interval: int = 5) -> None:
+        super().__init__()
+        self.depot_index = depot_index
+        self.n_gen = n_gen
+        self.interval = interval
+
+    def notify(self, algorithm) -> None:
+        gen = algorithm.n_gen
+        if gen % self.interval != 0 and not algorithm.termination.has_terminated():
+            return
+        F = algorithm.pop.get("F").flatten()
+        best = F.min()
+        mean = F.mean()
+        print(
+            f"\r  depot {self.depot_index:>3} | gen {gen:>4}/{self.n_gen}"
+            f" | best {best:>10.2f} | mean {mean:>10.2f}",
+            end="",
+            flush=True,
+        )
+
+
 @dataclass
 class GADepotHistory:
     depot_index: int
@@ -37,6 +62,8 @@ class GADepotHistory:
     std: List[float] = field(default_factory=list)
     clones_removed: int = 0
     stopped_early: bool = False
+    feasible_seen: int = 0
+    total_evaluated: int = 0
 
 
 def run_ga_routing(
@@ -106,8 +133,10 @@ def run_ga_routing(
         ),
         seed=cfg.seed,
         save_history=True,
-        verbose=True,
+        verbose=False,
+        callback=_ProgressCallback(depot_index=depot.index, n_gen=cfg.n_gen),
     )
+    print()  # newline after the last \r update
 
     gens = [g.pop.get("F").flatten() for g in (result.history or [])]
     history = GADepotHistory(
@@ -117,6 +146,8 @@ def run_ga_routing(
         std=[float(f.std()) for f in gens],
         clones_removed=result.algorithm.survival.eliminated_count,
         stopped_early=len(gens) < cfg.n_gen,
+        feasible_seen=problem.feasible_seen,
+        total_evaluated=problem.total_evaluated,
     )
 
     ordered_customers = [customers[i] for i in result.X.astype(int)]
