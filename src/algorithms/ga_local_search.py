@@ -201,8 +201,6 @@ def local_search(
     depot: Depot,
     dist_fn: Callable[[int, int], float],
     local_search_max_iterations: int,
-    capacity_penalty: float,
-    duration_penalty: float,
     is_stage_2: bool = False,
     frozen_route_indices: set[int] | None = None,
     executed_capacity_by_route: List[float] | None = None,
@@ -747,26 +745,6 @@ def local_search(
                                     routes[rv_idx] = new_rv
                                     improved = True
                                     break
-
-        # After each improvement, re-run linear_split on the flattened giant
-        # tour so the vehicle partition is re-optimised before the next LS pass.
-        if improved:
-            if is_stage_2:
-                # Stage-2 route matching is anchored by frozen prefixes.
-                # Re-splitting can merge/split routes and drop those anchors,
-                # producing false "prefix mismatch" rejections upstream.
-                continue
-
-            flat = [c for route in routes for c in route]
-            if is_stage_2:
-                # Stage 2 may temporarily rely on tolerance-aware feasibility;
-                # keep the current partition if strict split becomes impossible.
-                try:
-                    routes = [list(r.customers) for r in linear_split(flat, depot, dist_fn, capacity_penalty=capacity_penalty, duration_penalty=duration_penalty)]
-                except ValueError:
-                    pass
-            else:
-                routes = [list(r.customers) for r in linear_split(flat, depot, dist_fn, capacity_penalty=capacity_penalty, duration_penalty=duration_penalty)]
 
     # Remove empty routes and return (except in Stage 2, where physical
     # vehicle index mapping is strictly required).
