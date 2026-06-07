@@ -25,7 +25,7 @@ from pymoo.termination.default import DefaultSingleObjectiveTermination
 
 from core.entities import Customer, Depot, Route
 from utils.config import GAConfig
-from algorithms.ga_split import bellman_split
+from algorithms.ga_split import linear_split
 from algorithms.ga_problems import RoutingProblem, DynamicRoutingProblem
 from algorithms.ga_operators import HeuristicSampling, LSMutation, WellSpacedSurvival
 
@@ -74,7 +74,7 @@ def run_ga_routing(
 ) -> Tuple[List[Route], GADepotHistory]:
     """
     Run GA to find the best visiting order for a depot's customers, then use
-    the Bellman split to partition the giant tour into capacity-feasible routes.
+    the Linear split to partition the giant tour into feasible routes.
 
     Parameters
     ----------
@@ -98,7 +98,8 @@ def run_ga_routing(
     if len(customers) == 1:
         return [Route(depot=depot, customers=list(customers))], GADepotHistory(depot_index=depot.index)
 
-    problem = RoutingProblem(depot=depot, customers=customers, dist_fn=dist_fn)
+    problem = RoutingProblem(depot=depot, customers=customers, dist_fn=dist_fn,
+                             capacity_penalty=cfg.capacity_penalty, duration_penalty=cfg.duration_penalty)
 
     algorithm = GA(
         pop_size=cfg.pop_size,
@@ -151,7 +152,8 @@ def run_ga_routing(
     )
 
     ordered_customers = [customers[i] for i in result.X.astype(int)]
-    return bellman_split(ordered_customers, depot, dist_fn), history
+    return linear_split(ordered_customers, depot, dist_fn,
+                         capacity_penalty=cfg.capacity_penalty, duration_penalty=cfg.duration_penalty), history
 
 
 def run_ga_reroute(

@@ -7,9 +7,9 @@ Phase 1 — Clustering (CCBC):
     slots, multi-start Voronoi initialisation, and two-phase boundary
     resolution.
 
-Phase 2 — Routing (GA + Bellman split):
+Phase 2 — Routing (GA + Linear split):
     Within each depot's cluster a GA optimises the giant-tour order via SPV
-    encoding.  For each candidate permutation the Bellman split finds the
+    encoding.  For each candidate permutation the Linear split finds the
     optimal vehicle partition given the depot's capacity.
 
 Usage

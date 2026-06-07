@@ -10,7 +10,7 @@ from dataclasses import dataclass
 import math
 from typing import Callable, List
 
-from algorithms.ga_split import bellman_split
+from algorithms.ga_split import linear_split
 from core.entities import Customer, Depot, Route
 from utils.defaults import DEFAULT_GA_LOCAL_SEARCH_MAX_ITERATIONS
 
@@ -747,7 +747,7 @@ def local_search(
                                     improved = True
                                     break
 
-        # After each improvement, re-run bellman_split on the flattened giant
+        # After each improvement, re-run linear_split on the flattened giant
         # tour so the vehicle partition is re-optimised before the next LS pass.
         if improved:
             if is_stage_2:
@@ -761,11 +761,11 @@ def local_search(
                 # Stage 2 may temporarily rely on tolerance-aware feasibility;
                 # keep the current partition if strict split becomes impossible.
                 try:
-                    routes = [list(r.customers) for r in bellman_split(flat, depot, dist_fn)]
+                    routes = [list(r.customers) for r in linear_split(flat, depot, dist_fn)]
                 except ValueError:
                     pass
             else:
-                routes = [list(r.customers) for r in bellman_split(flat, depot, dist_fn)]
+                routes = [list(r.customers) for r in linear_split(flat, depot, dist_fn)]
 
     # Remove empty routes and return (except in Stage 2, where physical
     # vehicle index mapping is strictly required).

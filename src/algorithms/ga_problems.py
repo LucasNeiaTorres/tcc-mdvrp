@@ -12,7 +12,8 @@ import numpy as np
 from pymoo.core.problem import ElementwiseProblem
 
 from core.entities import Customer, Depot
-from algorithms.ga_split import bellman_split
+from core.solution import Solution
+from algorithms.ga_split import linear_split
 
 
 class RoutingProblem(ElementwiseProblem):
@@ -36,6 +37,8 @@ class RoutingProblem(ElementwiseProblem):
         depot: Depot,
         customers: List[Customer],
         dist_fn: Callable[[int, int], float],
+        capacity_penalty: float,
+        duration_penalty: float,
     ) -> None:
         super().__init__(
             n_var=len(customers),
@@ -49,21 +52,33 @@ class RoutingProblem(ElementwiseProblem):
         self.dist_fn = dist_fn
         self.start_node = depot
         self.end_depot = depot
+        self.capacity_penalty = capacity_penalty
+        self.duration_penalty = duration_penalty
+        self.feasible_seen: int = 0
+        self.total_evaluated: int = 0
 
     def _evaluate(self, x: np.ndarray, out: dict, *args, **kwargs) -> None:
         x = np.rint(x).astype(int)
         ordered = [self.customers[i] for i in x]
-        segments = bellman_split(ordered, self.end_depot, self.dist_fn)
+        segments = linear_split(ordered, self.end_depot, self.dist_fn,
+                                 capacity_penalty=self.capacity_penalty, duration_penalty=self.duration_penalty)
 
-        total = 0.0
+        self.total_evaluated += 1
+        sol = Solution(routes=segments)
+        if sol.fully_feasible():
+            self.feasible_seen += 1
+
+        # Fitness = total travel distance + soft-constraint penalties.
+        total = sum(seg.total_distance() for seg in segments)
         for seg in segments:
-            total += self.dist_fn(self.start_node.index, seg.customers[0].index)
-            for i in range(len(seg.customers) - 1):
-                total += self.dist_fn(seg.customers[i].index, seg.customers[i + 1].index)
-            total += self.dist_fn(seg.customers[-1].index, self.end_depot.index)
+            cap_excess = max(0.0, seg.total_demand() - self.depot.max_capacity)
+            total += self.capacity_penalty * cap_excess
+            if self.depot.max_duration > 0:
+                dur_excess = max(0.0, seg.total_duration() - self.depot.max_duration)
+                total += self.duration_penalty * dur_excess
 
-        excess = max(0, len(segments) - self.depot.max_vehicles)
-        out["F"] = total + excess * total
+        excess_vehicles = max(0, len(segments) - self.depot.max_vehicles)
+        out["F"] = total + excess_vehicles * total
 
 
 class DynamicRoutingProblem(ElementwiseProblem):

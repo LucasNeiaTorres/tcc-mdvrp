@@ -14,7 +14,7 @@ from pymoo.core.sampling import Sampling
 from pymoo.core.survival import Survival
 
 from core.entities import Customer, Depot
-from algorithms.ga_split import bellman_split
+from algorithms.ga_split import linear_split
 from algorithms.ga_local_search import local_search
 
 
@@ -133,7 +133,7 @@ class LSMutation(Mutation):
     Prins (2004) local-search mutation operator for pymoo GA.
 
     Applied with probability ``prob`` to each child chromosome after crossover.
-    The chromosome is decoded to routes via bellman_split, improved by
+    The chromosome is decoded to routes via linear_split, improved by
     ``local_search``, then re-encoded back to an integer permutation so pymoo
     can continue operating on it.
 
@@ -177,7 +177,7 @@ class LSMutation(Mutation):
                 continue
 
             ordered = [self.customers[i] for i in X[k]]
-            segments = bellman_split(ordered, self.depot, self.dist_fn)
+            segments = linear_split(ordered, self.depot, self.dist_fn)
             improved_segs = local_search(segments, self.depot, self.dist_fn, self.local_search_max_iterations)
 
             # Re-encode: flatten improved segments → integer permutation

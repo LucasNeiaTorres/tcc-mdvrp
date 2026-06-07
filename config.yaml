@@ -13,6 +13,8 @@ ga:
   stagnation_period: 10   # sliding window size for early stopping (pymoo ftol period)
   stagnation_ftol: 1e-6   # absolute fitness tolerance; stop if best doesn't improve by this over stagnation_period gens
   time_limit: "00:05:00"  # per-depot GA wall-clock limit (HH:MM:SS); acts as a hard cap alongside n_gen and stagnation
+  capacity_penalty: 10.0    # penalty per unit of excess capacity demand (same value used by the split)
+  duration_penalty: 5.0     # penalty per unit of excess route duration (same value used by the split)
 
 simulation:
   reroute_degradation_threshold: 1.20  # Stage-1 acceptance limit for reroute cost (e.g., 1.10 = +10%)
