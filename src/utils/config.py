@@ -29,6 +29,8 @@ class GAConfig:
     stagnation_period: int
     stagnation_ftol: float
     time_limit: str
+    capacity_penalty: float
+    duration_penalty: float
 
 
 @dataclass
@@ -37,8 +39,6 @@ class SimulationConfig:
     cluster_degradation_threshold: float
     penalty_overcapacity_per_unit: float
     penalty_overtime_per_minute: float
-    capacity_penalty: float
-    duration_penalty: float
 
 
 @dataclass

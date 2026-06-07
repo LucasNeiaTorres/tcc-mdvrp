@@ -12,7 +12,6 @@ from typing import Callable, List
 
 from algorithms.ga_split import linear_split
 from core.entities import Customer, Depot, Route
-from utils.defaults import DEFAULT_GA_LOCAL_SEARCH_MAX_ITERATIONS
 
 
 @dataclass(frozen=True)
