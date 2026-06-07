@@ -7,7 +7,7 @@ import pytest
 
 from core.entities import Customer, Depot, Route
 from core.solution import Solution
-from utils.config import CCBCConfig, GAConfig, AppConfig
+from utils.config import CCBCConfig, GAConfig, AppConfig, SimulationConfig
 
 from algorithms.ccbc_cluster import run_ccbc_clustering
 from algorithms.ga_problems import RoutingProblem
@@ -74,10 +74,23 @@ def ga_cfg() -> GAConfig:
         duration_penalty=500.0,
     )
 
+@pytest.fixture
+def simulation_cfg() -> SimulationConfig:
+    return SimulationConfig(
+        reroute_degradation_threshold=1.20,
+        cluster_degradation_threshold=1.10,
+        penalty_overcapacity_per_unit=100000.0,
+        penalty_overtime_per_minute=50000.0,
+    )
+
 
 @pytest.fixture
-def app_cfg(ccbc_cfg, ga_cfg) -> AppConfig:
-    return AppConfig(ccbc=ccbc_cfg, ga=ga_cfg)
+def app_cfg(ccbc_cfg, ga_cfg, simulation_cfg) -> AppConfig:
+    return AppConfig(
+        ccbc=ccbc_cfg,
+        ga=ga_cfg,
+        simulation=simulation_cfg,
+    )
 
 
 # ---------------------------------------------------------------------------

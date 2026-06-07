@@ -45,7 +45,7 @@ class SimulationConfig:
 class AppConfig:
     ccbc: CCBCConfig
     ga: GAConfig
-    simulation: SimulationConfig = field(default_factory=SimulationConfig)
+    simulation: SimulationConfig
 
 
 def load_config(path: Optional[str] = None) -> AppConfig:
