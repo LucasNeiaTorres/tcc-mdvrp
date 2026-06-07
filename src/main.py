@@ -109,22 +109,22 @@ def main() -> int:
         routing_file=str(routing_file),
     )
 
-    # # Visualize
-    # if reference_solution is not None:
-    #     visualize_comparison(
-    #         instance,
-    #         [reference_solution, solution],
-    #         titles=[
-    #             f"Reference (obj: {reference_solution.objective:.2f})",
-    #             f"CCBC+GA (cost: {solution.total_cost():.2f})",
-    #         ],
-    #     )
-    # else:
-    #     visualize_solution(
-    #         instance,
-    #         solution,
-    #         title=f"CCBC+GA solution (cost: {solution.total_cost():.2f})",
-    #     )
+    # Visualize
+    if reference_solution is not None:
+        visualize_comparison(
+            instance,
+            [reference_solution, solution],
+            titles=[
+                f"Reference (obj: {reference_solution.objective:.2f})",
+                f"CCBC+GA (cost: {solution.total_cost():.2f})",
+            ],
+        )
+    else:
+        visualize_solution(
+            instance,
+            solution,
+            title=f"CCBC+GA solution (cost: {solution.total_cost():.2f})",
+        )
     
     if failures is not None and not args.no_simulate:
         simulated_solution, history_log = run_simulation(
@@ -137,21 +137,21 @@ def main() -> int:
             # output_dir=base_dir / "data" / "processed" / "simulations" / data_file.name,
         )
 
-        # if reference_solution is not None:
-        #     visualize_comparison(
-        #         instance,
-        #         [reference_solution, simulated_solution],
-        #         titles=[
-        #             f"Reference (obj: {reference_solution.objective:.2f})",
-        #             f"CCBC+GA after simulation (cost: {simulated_solution.total_cost():.2f})",
-        #         ],
-        #     )
-        # else:
-        #     visualize_solution(
-        #         instance,
-        #         simulated_solution,
-        #         title=f"CCBC+GA after simulation (cost: {simulated_solution.total_cost():.2f})",
-        #     )
+        if reference_solution is not None:
+            visualize_comparison(
+                instance,
+                [reference_solution, simulated_solution],
+                titles=[
+                    f"Reference (obj: {reference_solution.objective:.2f})",
+                    f"CCBC+GA after simulation (cost: {simulated_solution.total_cost():.2f})",
+                ],
+            )
+        else:
+            visualize_solution(
+                instance,
+                simulated_solution,
+                title=f"CCBC+GA after simulation (cost: {simulated_solution.total_cost():.2f})",
+            )
 
         log_path = SIMULATION_LOG_DIR / f"{data_file.name}_log.json"
         validation_result = validate_simulation_log(log_path)
