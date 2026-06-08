@@ -158,6 +158,17 @@ def main() -> int:
         blocked_edge_violations = validation_result["blocked_edge_violations"]
         unserved_customers = validation_result["unserved_customers"]
 
+        try:
+            log_path_for_cmd = Path(".") / log_path.resolve().relative_to(base_dir.resolve())
+        except ValueError:
+            log_path_for_cmd = log_path
+        log_arg = str(log_path_for_cmd).replace("/", "\\")
+
+        print("\nTo animate the simulation log, run the following command:")
+        print(
+            f"python3 .\\src\\tools\\animate_simulation_log.py --log-file {log_arg}"
+        )
+
         print_simulation_validation(validation_result, log_path)
 
         if blocked_edge_violations or unserved_customers:
