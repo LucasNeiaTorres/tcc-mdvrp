@@ -201,6 +201,7 @@ def local_search(
     depot: Depot,
     dist_fn: Callable[[int, int], float],
     local_search_max_iterations: int,
+    granularity: int = 0,
     is_stage_2: bool = False,
     frozen_route_indices: set[int] | None = None,
     executed_capacity_by_route: List[float] | None = None,
@@ -237,6 +238,8 @@ def local_search(
         Duration already consumed by each route prefix before optimization.
     executed_last_nodes:
         Real vehicle positions at the start of each pending suffix.
+    granularity:
+        Number of nearest neighbors considered for each customer (0 = all).
 
     Returns
     -------
@@ -269,6 +272,18 @@ def local_search(
     if executed_last_nodes is not None:
         for idx, node in enumerate(executed_last_nodes[: len(routes)]):
             real_start_nodes[idx] = node
+
+    # Granularity filter: pre-compute the γ nearest neighbors for each customer
+    # (Prins 2004 / Vidal 2011 §4.5).  Only (u, v) pairs where v is among u's
+    # γ closest customers are evaluated.  granularity=0 disables the filter.
+    _neighbors: dict[int, set[int]] | None = None
+    if granularity > 0:
+        _all_customers = [c for route in routes for c in route]
+        _neighbors = {}
+        for _c in _all_customers:
+            _others = [o for o in _all_customers if o is not _c]
+            _others.sort(key=lambda o: dist_fn(_c.index, o.index))
+            _neighbors[_c.index] = {o.index for o in _others[:granularity]}
 
     global _LOCAL_SEARCH_CONTEXT
     _LOCAL_SEARCH_CONTEXT = _LocalSearchContext(
@@ -335,6 +350,10 @@ def local_search(
 
                         v = rv[v_idx]
                         y = rv[v_idx + 1] if v_idx + 1 < len(rv) else depot
+
+                        # Granularity filter: skip if v is not among u's nearest neighbors.
+                        if _neighbors is not None and v.index not in _neighbors.get(u.index, set()):
+                            continue
 
                         # M1: relocate u after v
                         if not (ru_idx == rv_idx and v_idx == u_idx - 1):

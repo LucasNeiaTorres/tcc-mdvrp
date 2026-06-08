@@ -7,7 +7,7 @@ import pytest
 
 from core.entities import Customer, Depot, Route
 from core.solution import Solution
-from utils.config import CCBCConfig, GAConfig, AppConfig, SimulationConfig
+from utils.config import CCBCConfig, GAConfig, LocalSearchConfig, AppConfig, SimulationConfig
 
 from algorithms.ccbc_cluster import run_ccbc_clustering
 from algorithms.ga_problems import RoutingProblem
@@ -65,7 +65,6 @@ def ga_cfg() -> GAConfig:
         n_gen=30,
         seed=0,
         mutation_prob=0.5,
-        local_search_max_iterations=10,
         clone_delta=1.0,
         stagnation_period=5,
         stagnation_ftol=1e-6,
@@ -73,6 +72,11 @@ def ga_cfg() -> GAConfig:
         capacity_penalty=500.0,
         duration_penalty=500.0,
     )
+
+
+@pytest.fixture
+def ls_cfg() -> LocalSearchConfig:
+    return LocalSearchConfig(max_iterations=10, granularity=0)
 
 @pytest.fixture
 def simulation_cfg() -> SimulationConfig:
@@ -85,10 +89,11 @@ def simulation_cfg() -> SimulationConfig:
 
 
 @pytest.fixture
-def app_cfg(ccbc_cfg, ga_cfg, simulation_cfg) -> AppConfig:
+def app_cfg(ccbc_cfg, ga_cfg, ls_cfg, simulation_cfg) -> AppConfig:
     return AppConfig(
         ccbc=ccbc_cfg,
         ga=ga_cfg,
+        local_search=ls_cfg,
         simulation=simulation_cfg,
     )
 
@@ -217,7 +222,7 @@ class TestLocalSearch:
         routes = [Route(depot=ls_depot, customers=[customers[3], customers[0]]),
                   Route(depot=ls_depot, customers=[customers[2], customers[1]])]
         before = sum(_route_cost(r.customers, ls_depot, dfn) for r in routes)
-        improved = local_search(routes, ls_depot, dfn, local_search_max_iterations=200, capacity_penalty=500.0, duration_penalty=500.0)
+        improved = local_search(routes, ls_depot, dfn, local_search_max_iterations=200)
         after = sum(_route_cost(r, ls_depot, dfn) for r in improved)
         assert after <= before + 1e-9
 
@@ -226,7 +231,7 @@ class TestLocalSearch:
         customers, dfn = ls_nodes
         routes = [Route(depot=ls_depot, customers=[customers[0], customers[3]]),
                   Route(depot=ls_depot, customers=[customers[1], customers[2]])]
-        improved = local_search(routes, ls_depot, dfn, local_search_max_iterations=200, capacity_penalty=500.0, duration_penalty=500.0)
+        improved = local_search(routes, ls_depot, dfn, local_search_max_iterations=200)
         result_indices = [c.index for r in improved for c in r]
         expected_indices = sorted(c.index for c in customers)
         assert sorted(result_indices) == expected_indices
@@ -237,7 +242,7 @@ class TestLocalSearch:
         tight_depot = Depot(index=0, x=0.0, y=0.0, max_duration=0.0, max_capacity=10)
         routes = [Route(depot=tight_depot, customers=[customers[0], customers[1]]),
                   Route(depot=tight_depot, customers=[customers[2], customers[3]])]
-        improved = local_search(routes, tight_depot, dfn, local_search_max_iterations=200, capacity_penalty=500.0, duration_penalty=500.0)
+        improved = local_search(routes, tight_depot, dfn, local_search_max_iterations=200)
         for r in improved:
             assert sum(c.demand for c in r) <= tight_depot.max_capacity
 
@@ -245,14 +250,14 @@ class TestLocalSearch:
         """Local search must strip empty routes from its output."""
         customers, dfn = ls_nodes
         routes = [Route(depot=ls_depot, customers=[c]) for c in customers]
-        improved = local_search(routes, ls_depot, dfn, local_search_max_iterations=200, capacity_penalty=500.0, duration_penalty=500.0)
+        improved = local_search(routes, ls_depot, dfn, local_search_max_iterations=200)
         assert all(len(r) > 0 for r in improved)
 
     def test_single_route_stays_valid(self, ls_depot, ls_nodes):
         """A single feasible route should remain valid after LS."""
         customers, dfn = ls_nodes
         routes = [Route(depot=ls_depot, customers=list(customers))]
-        improved = local_search(routes, ls_depot, dfn, local_search_max_iterations=200, capacity_penalty=500.0, duration_penalty=500.0)
+        improved = local_search(routes, ls_depot, dfn, local_search_max_iterations=200)
         result_indices = sorted(c.index for r in improved for c in r)
         assert result_indices == sorted(c.index for c in customers)
 
@@ -293,12 +298,12 @@ class TestLocalSearch:
 # ---------------------------------------------------------------------------
 
 class TestRunGARouting:
-    def test_empty_cluster(self, depots, ga_cfg, dist_fn):
-        routes, _ = run_ga_routing(depots[0], [], dist_fn, ga_cfg)
+    def test_empty_cluster(self, depots, ga_cfg, ls_cfg, dist_fn):
+        routes, _ = run_ga_routing(depots[0], [], dist_fn, ga_cfg, ls_cfg)
         assert routes == []
 
-    def test_single_customer(self, depots, customers, ga_cfg, dist_fn):
-        routes, _ = run_ga_routing(depots[0], [customers[0]], dist_fn, ga_cfg)
+    def test_single_customer(self, depots, customers, ga_cfg, ls_cfg, dist_fn):
+        routes, _ = run_ga_routing(depots[0], [customers[0]], dist_fn, ga_cfg, ls_cfg)
         assert len(routes) == 1
         assert routes[0].customers[0].index == customers[0].index
 

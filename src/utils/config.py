@@ -19,12 +19,17 @@ class CCBCConfig:
 
 
 @dataclass
+class LocalSearchConfig:
+    max_iterations: int
+    granularity: int
+
+
+@dataclass
 class GAConfig:
     pop_size: int
     n_gen: int
     seed: int
     mutation_prob: float
-    local_search_max_iterations: int
     clone_delta: float
     stagnation_period: int
     stagnation_ftol: float
@@ -45,6 +50,7 @@ class SimulationConfig:
 class AppConfig:
     ccbc: CCBCConfig
     ga: GAConfig
+    local_search: LocalSearchConfig
     simulation: SimulationConfig
 
 
@@ -67,6 +73,7 @@ def load_config(path: Optional[str] = None) -> AppConfig:
 
     ccbc_raw = raw["ccbc"]
     ga_raw = raw["ga"]
+    ls_raw = raw["local_search"]
     simulation_raw = raw.get("simulation", {})
 
     return AppConfig(
@@ -80,13 +87,16 @@ def load_config(path: Optional[str] = None) -> AppConfig:
             n_gen=int(ga_raw["n_gen"]),
             seed=int(ga_raw["seed"]),
             mutation_prob=float(ga_raw["mutation_prob"]),
-            local_search_max_iterations=int(ga_raw["local_search_max_iterations"]),
             clone_delta=float(ga_raw["clone_delta"]),
             stagnation_period=int(ga_raw["stagnation_period"]),
             stagnation_ftol=float(ga_raw["stagnation_ftol"]),
             time_limit=str(ga_raw["time_limit"]),
             capacity_penalty=float(ga_raw["capacity_penalty"]),
             duration_penalty=float(ga_raw["duration_penalty"]),
+        ),
+        local_search=LocalSearchConfig(
+            max_iterations=int(ls_raw["max_iterations"]),
+            granularity=int(ls_raw["granularity"]),
         ),
         simulation=SimulationConfig(
             reroute_degradation_threshold=float(simulation_raw["reroute_degradation_threshold"]),
