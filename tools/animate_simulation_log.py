@@ -142,10 +142,6 @@ def _as_float(value: Any) -> float | None:
     return None
 
 
-def _normalize_edge(node_a: int, node_b: int) -> tuple[int, int]:
-    return (node_a, node_b) if node_a <= node_b else (node_b, node_a)
-
-
 def _normalize_event_type(value: Any) -> str:
     return str(value or "").strip().lower()
 
@@ -879,28 +875,7 @@ class Visualizer:
         ys = [point[1] for point in compact]
         return xs, ys
 
-    def _route_edge_keys(self, runtime: RouteRuntime, pose: Pose) -> set[tuple[int, int]]:
-        remaining = [
-            customer
-            for customer in runtime.plan.customers
-            if customer not in runtime.visited_set and customer in self.positions
-        ]
-
-        path_nodes: list[int] = [pose.current_node]
-        path_nodes.extend(remaining)
-        if remaining or pose.current_node != runtime.plan.depot_index:
-            path_nodes.append(runtime.plan.depot_index)
-
-        edges: set[tuple[int, int]] = set()
-        for idx in range(len(path_nodes) - 1):
-            node_a = path_nodes[idx]
-            node_b = path_nodes[idx + 1]
-            if node_a == node_b:
-                continue
-            edges.add(_normalize_edge(node_a, node_b))
-        return edges
-
-    def _refresh_blocked_edges(self, active_route_edges: set[tuple[int, int]]) -> int:
+    def _refresh_blocked_edges(self) -> None:
         cutoff = self.sim_time - self.blocked_edge_ttl
         while self.blocked_edges and self.blocked_edges[0].time_minutes < cutoff:
             self.blocked_edges.popleft()
@@ -910,10 +885,6 @@ class Visualizer:
         segments: list[list[tuple[float, float]]] = []
         colors: list[tuple[float, float, float, float]] = []
         for blocked in self.blocked_edges:
-            edge_key = _normalize_edge(blocked.node_a, blocked.node_b)
-            if edge_key not in active_route_edges:
-                continue
-
             pos_a = self.positions.get(blocked.node_a)
             pos_b = self.positions.get(blocked.node_b)
             if pos_a is None or pos_b is None:
@@ -926,14 +897,11 @@ class Visualizer:
 
         self.blocked_collection.set_segments(segments)
         self.blocked_collection.set_colors(colors)
-        return len(segments)
 
     def _refresh_artists(self) -> None:
-        active_route_edges: set[tuple[int, int]] = set()
         for route_id, runtime in self.route_runtimes.items():
             pose = self._vehicle_pose(runtime)
             xs, ys = self._route_polyline(runtime, pose)
-            active_route_edges.update(self._route_edge_keys(runtime, pose))
 
             self.route_lines[route_id].set_data(xs, ys)
 
@@ -952,7 +920,7 @@ class Visualizer:
             if self.show_ids and route_id in self.vehicle_labels:
                 self.vehicle_labels[route_id].set_position((pose.x + 1.0, pose.y + 1.0))
 
-        visible_blocked_count = self._refresh_blocked_edges(active_route_edges)
+        self._refresh_blocked_edges()
 
         state = "PAUSED" if self.paused else "RUNNING"
         self.status_text.set_text(
@@ -964,7 +932,7 @@ class Visualizer:
                     ),
                     (
                         f"events = {self.event_index}/{len(self.events)}  "
-                        f"|  blocked visible = {visible_blocked_count}"
+                        f"|  blocked visible = {len(self.blocked_edges)}"
                     ),
                     "keys: space play/pause, up/down speed, left/right seek",
                 ]
