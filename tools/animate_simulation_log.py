@@ -914,7 +914,16 @@ class Visualizer:
             Line2D([0], [0], marker="s", color="w", markerfacecolor="#ff8c00", markeredgecolor="black", markeredgewidth=0.6, markersize=8, label="Vehicle (servicing)"),
             Line2D([0], [0], marker="o", color="w", markerfacecolor="#b0b0b0", markeredgecolor="black", markeredgewidth=0.6, markersize=8, label="Vehicle (idle)"),
         ]
-        self.ax.legend(handles=legend_handles, loc="upper right", fontsize=8)
+        # Keep legend outside the axes so it never blocks the animated map.
+        self.fig.subplots_adjust(right=0.74)
+        self.ax.legend(
+            handles=legend_handles,
+            loc="upper left",
+            bbox_to_anchor=(1.01, 1.0),
+            borderaxespad=0.0,
+            fontsize=8,
+            framealpha=0.95,
+        )
 
     def _init_artists(self) -> None:
         self.ax.add_collection(self.blocked_collection)
