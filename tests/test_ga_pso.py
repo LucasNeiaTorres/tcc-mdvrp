@@ -71,6 +71,7 @@ def ga_cfg() -> GAConfig:
         time_limit="00:01:00",
         capacity_penalty=500.0,
         duration_penalty=500.0,
+        n_offsprings=10,
     )
 
 

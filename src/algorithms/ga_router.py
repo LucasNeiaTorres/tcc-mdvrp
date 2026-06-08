@@ -123,6 +123,7 @@ def run_ga_routing(
         ),
         survival=WellSpacedSurvival(delta=cfg.clone_delta),
         eliminate_duplicates=True,
+        n_offsprings=cfg.n_offsprings,
     )
 
     result = minimize(

@@ -14,6 +14,7 @@ ga:
   time_limit: "00:05:00"  # per-depot GA wall-clock limit (HH:MM:SS); acts as a hard cap alongside n_gen and stagnation
   capacity_penalty: 10.0    # penalty per unit of excess capacity demand (same value used by the split)
   duration_penalty: 5.0     # penalty per unit of excess route duration (same value used by the split)
+  n_offsprings: 90          # number of offspring generated per generation
 
 local_search:
   max_iterations: 100

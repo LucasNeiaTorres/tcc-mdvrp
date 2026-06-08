@@ -36,6 +36,7 @@ class GAConfig:
     time_limit: str
     capacity_penalty: float
     duration_penalty: float
+    n_offsprings: int
 
 
 @dataclass
@@ -93,6 +94,7 @@ def load_config(path: Optional[str] = None) -> AppConfig:
             time_limit=str(ga_raw["time_limit"]),
             capacity_penalty=float(ga_raw["capacity_penalty"]),
             duration_penalty=float(ga_raw["duration_penalty"]),
+            n_offsprings=int(ga_raw["n_offsprings"]),
         ),
         local_search=LocalSearchConfig(
             max_iterations=int(ls_raw["max_iterations"]),
