@@ -98,7 +98,7 @@ def main() -> int:
     cfg = load_config()
 
     # Always instantiate the algorithm because simulation rerouting depends on it.
-    algorithm = CCBCGAAlgorithm(cfg)
+    algorithm = CCBCGAAlgorithm(cfg, debug=True)
 
     if routes_file is not None:
         print(f"Using precomputed routes from: {routes_file}")

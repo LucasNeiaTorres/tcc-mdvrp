@@ -33,15 +33,30 @@ from algorithms.ga_operators import HeuristicSampling, LSMutation, WellSpacedSur
 class _ProgressCallback(Callback):
     """Prints a compact progress line every `interval` generations."""
 
-    def __init__(self, depot_index: int, n_gen: int, interval: int = 5) -> None:
+    def __init__(
+        self,
+        depot_index: int,
+        n_gen: int,
+        problem: "RoutingProblem",
+        mutation: "LSMutation",
+        feasibility_target: float,
+        penalty_adjustment_period: int,
+        interval: int = 5,
+        verbose: bool = False,
+    ) -> None:
         super().__init__()
         self.depot_index = depot_index
         self.n_gen = n_gen
         self.interval = interval
+        self.verbose = verbose
+        self._last_total: int = 0
+        self._last_feasible: int = 0
 
     def notify(self, algorithm) -> None:
         gen = algorithm.n_gen
         if gen % self.interval != 0 and not algorithm.termination.has_terminated():
+            return
+        if not self.verbose:
             return
         F = algorithm.pop.get("F").flatten()
         best = F.min()
@@ -72,6 +87,7 @@ def run_ga_routing(
     dist_fn: Callable[[int, int], float],
     cfg: GAConfig,
     ls_cfg: LocalSearchConfig,
+    verbose: bool = False,
 ) -> Tuple[List[Route], GADepotHistory]:
     """
     Run GA to find the best visiting order for a depot's customers, then use
@@ -140,9 +156,17 @@ def run_ga_routing(
         seed=cfg.seed,
         save_history=True,
         verbose=False,
-        callback=_ProgressCallback(depot_index=depot.index, n_gen=cfg.n_gen),
+        callback=_ProgressCallback(
+            depot_index=depot.index,
+            n_gen=cfg.n_gen,
+            problem=problem,
+            mutation=mutation,
+            feasibility_target=cfg.feasibility_target,
+            penalty_adjustment_period=cfg.penalty_adjustment_period,
+            verbose=verbose,
+        ),
     )
-    print()  # newline after the last \r update
+    # print()  # newline after the last \r update
 
     gens = [g.pop.get("F").flatten() for g in (result.history or [])]
     history = GADepotHistory(
@@ -157,5 +181,7 @@ def run_ga_routing(
     )
 
     ordered_customers = [customers[i] for i in result.X.astype(int)]
+    if verbose:
+        print()  # newline after the last \r progress line
     return linear_split(ordered_customers, depot, dist_fn,
                          capacity_penalty=cfg.capacity_penalty, duration_penalty=cfg.duration_penalty), history
