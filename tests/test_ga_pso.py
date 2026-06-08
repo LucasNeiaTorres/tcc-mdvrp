@@ -55,7 +55,7 @@ def dist_fn(depots, customers):
 
 @pytest.fixture
 def ccbc_cfg() -> CCBCConfig:
-    return CCBCConfig(max_iter=100, tol=1e-4, n_starts=3)
+    return CCBCConfig(max_iter=100, tol=1e-4, n_starts=3, capacity_balance_target=0.90, duration_estimate_slack=1.15)
 
 
 @pytest.fixture
@@ -106,7 +106,7 @@ def app_cfg(ccbc_cfg, ga_cfg, ls_cfg, simulation_cfg) -> AppConfig:
 class TestCCBCClustering:
     def test_customers_split_by_nearest_depot(self, depots, customers):
         """Customers near depot 1 should be assigned to depot 1, etc."""
-        cfg = CCBCConfig(max_iter=100, tol=1e-4, n_starts=3)
+        cfg = CCBCConfig(max_iter=100, tol=1e-4, n_starts=3, capacity_balance_target=0.90, duration_estimate_slack=1.15)
         clusters = run_ccbc_clustering(customers=customers, depots=depots, cfg=cfg)
         depot1_indices = {c.index for c in clusters[depots[0]]}
         depot2_indices = {c.index for c in clusters[depots[1]]}
@@ -116,7 +116,7 @@ class TestCCBCClustering:
 
     def test_all_customers_assigned(self, depots, customers):
         """Every customer must appear in exactly one cluster."""
-        cfg = CCBCConfig(max_iter=100, tol=1e-4, n_starts=3)
+        cfg = CCBCConfig(max_iter=100, tol=1e-4, n_starts=3, capacity_balance_target=0.90, duration_estimate_slack=1.15)
         clusters = run_ccbc_clustering(customers=customers, depots=depots, cfg=cfg)
         assigned = [c for cs in clusters.values() for c in cs]
         assert len(assigned) == len(customers)
@@ -127,7 +127,7 @@ class TestCCBCClustering:
         # 6 customers each with demand=10; each depot has capacity=60 and 1 vehicle
         # → budget=60 per depot; 3 customers per depot is feasible
         cs = [Customer(index=i, x=float(i), y=0.0, demand=10, service_time=0) for i in range(1, 7)]
-        cfg = CCBCConfig(max_iter=100, tol=1e-4, n_starts=3)
+        cfg = CCBCConfig(max_iter=100, tol=1e-4, n_starts=3, capacity_balance_target=0.90, duration_estimate_slack=1.15)
         clusters = run_ccbc_clustering(customers=cs, depots=depots, cfg=cfg)
         for depot, assigned in clusters.items():
             total = sum(c.demand for c in assigned)
@@ -135,12 +135,12 @@ class TestCCBCClustering:
             assert total <= budget, f"Depot {depot.index} exceeded budget: {total} > {budget}"
 
     def test_empty_customers(self, depots):
-        cfg = CCBCConfig(max_iter=100, tol=1e-4, n_starts=3)
+        cfg = CCBCConfig(max_iter=100, tol=1e-4, n_starts=3, capacity_balance_target=0.90, duration_estimate_slack=1.15)
         clusters = run_ccbc_clustering(customers=[], depots=depots, cfg=cfg)
         assert all(v == [] for v in clusters.values())
 
     def test_returns_all_depots(self, depots, customers):
-        cfg = CCBCConfig(max_iter=100, tol=1e-4, n_starts=3)
+        cfg = CCBCConfig(max_iter=100, tol=1e-4, n_starts=3, capacity_balance_target=0.90, duration_estimate_slack=1.15)
         clusters = run_ccbc_clustering(customers=customers, depots=depots, cfg=cfg)
         assert set(clusters.keys()) == set(depots)
 

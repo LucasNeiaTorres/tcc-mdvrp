@@ -16,6 +16,8 @@ class CCBCConfig:
     max_iter: int
     tol: float
     n_starts: int
+    capacity_balance_target: float
+    duration_estimate_slack: float
 
 
 @dataclass
@@ -82,6 +84,8 @@ def load_config(path: Optional[str] = None) -> AppConfig:
             max_iter=int(ccbc_raw["max_iter"]),
             tol=float(ccbc_raw["tol"]),
             n_starts=int(ccbc_raw["n_starts"]),
+            capacity_balance_target=float(ccbc_raw["capacity_balance_target"]),
+            duration_estimate_slack=float(ccbc_raw["duration_estimate_slack"]),
         ),
         ga=GAConfig(
             pop_size=int(ga_raw["pop_size"]),
