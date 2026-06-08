@@ -108,6 +108,14 @@ class RouteUpdate:
     future_only: bool
 
 
+@dataclass(frozen=True)
+class ArrivalInfo:
+    time_minutes: float
+    node_index: int
+    depot_index: int
+    is_return_to_depot: bool
+
+
 def _as_int(value: Any) -> int | None:
     if value is None:
         return None
@@ -497,6 +505,7 @@ class Visualizer:
         instance_name: str,
         events: list[TimedEvent],
         route_runtimes: dict[int, RouteRuntime],
+        route_arrivals: dict[int, list[ArrivalInfo]],
         positions: dict[int, tuple[float, float]],
         customer_ids: list[int],
         depot_ids: list[int],
@@ -510,6 +519,7 @@ class Visualizer:
         self.instance_name = instance_name
         self.events = events
         self.route_runtimes = route_runtimes
+        self.route_arrivals = route_arrivals
         self.positions = positions
         self.customer_ids = customer_ids
         self.depot_ids = depot_ids
@@ -591,6 +601,24 @@ class Visualizer:
         }
         timelines = build_timelines(events, plans)
 
+        route_arrivals: dict[int, list[ArrivalInfo]] = defaultdict(list)
+        for event in events:
+            if event.event_type != "arrival":
+                continue
+            route_id = _as_int(event.payload.get("route_id"))
+            node_index = _as_int(event.payload.get("node_index"))
+            depot_index = _as_int(event.payload.get("depot_index"))
+            if route_id is None or node_index is None or depot_index is None:
+                continue
+            route_arrivals[route_id].append(
+                ArrivalInfo(
+                    time_minutes=event.time_minutes,
+                    node_index=node_index,
+                    depot_index=depot_index,
+                    is_return_to_depot=bool(event.payload.get("is_return_to_depot", False)),
+                )
+            )
+
         runtimes: dict[int, RouteRuntime] = {}
         for route_id, plan in sorted(plans.items()):
             sanitized_customers = [
@@ -614,6 +642,7 @@ class Visualizer:
             instance_name=instance_name,
             events=events,
             route_runtimes=runtimes,
+            route_arrivals=dict(route_arrivals),
             positions=positions,
             customer_ids=customer_ids,
             depot_ids=depot_ids,
@@ -848,12 +877,47 @@ class Visualizer:
         pos = self.positions.get(node_index, depot_pos)
         return Pose(pos[0], pos[1], "service", node_index, None)
 
-    def _route_polyline(self, runtime: RouteRuntime, pose: Pose) -> tuple[list[float], list[float]]:
-        remaining = [
+    def _future_customers_from_events(self, runtime: RouteRuntime) -> list[int]:
+        arrivals = self.route_arrivals.get(runtime.plan.route_id, [])
+        if not arrivals:
+            return []
+
+        depot_index = runtime.plan.depot_index
+        future: list[int] = []
+        seen: set[int] = set()
+
+        for arrival in arrivals:
+            if arrival.time_minutes <= self.sim_time + EPS:
+                continue
+
+            node_index = arrival.node_index
+            if arrival.is_return_to_depot or node_index == depot_index:
+                continue
+            if node_index in runtime.visited_set:
+                continue
+            if node_index not in self.positions:
+                continue
+            if node_index in seen:
+                continue
+
+            seen.add(node_index)
+            future.append(node_index)
+
+        return future
+
+    def _remaining_customers(self, runtime: RouteRuntime) -> list[int]:
+        inferred = self._future_customers_from_events(runtime)
+        if inferred:
+            return inferred
+
+        return [
             customer
             for customer in runtime.plan.customers
             if customer not in runtime.visited_set and customer in self.positions
         ]
+
+    def _route_polyline(self, runtime: RouteRuntime, pose: Pose) -> tuple[list[float], list[float]]:
+        remaining = self._remaining_customers(runtime)
 
         points: list[tuple[float, float]] = [(pose.x, pose.y)]
         for customer in remaining:
@@ -880,11 +944,7 @@ class Visualizer:
         return xs, ys
 
     def _route_edge_keys(self, runtime: RouteRuntime, pose: Pose) -> set[tuple[int, int]]:
-        remaining = [
-            customer
-            for customer in runtime.plan.customers
-            if customer not in runtime.visited_set and customer in self.positions
-        ]
+        remaining = self._remaining_customers(runtime)
 
         path_nodes: list[int] = [pose.current_node]
         path_nodes.extend(remaining)
