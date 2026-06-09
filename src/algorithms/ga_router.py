@@ -37,10 +37,6 @@ class _ProgressCallback(Callback):
         self,
         depot_index: int,
         n_gen: int,
-        problem: "RoutingProblem",
-        mutation: "LSMutation",
-        feasibility_target: float,
-        penalty_adjustment_period: int,
         interval: int = 5,
         verbose: bool = False,
     ) -> None:
@@ -159,10 +155,6 @@ def run_ga_routing(
         callback=_ProgressCallback(
             depot_index=depot.index,
             n_gen=cfg.n_gen,
-            problem=problem,
-            mutation=mutation,
-            feasibility_target=cfg.feasibility_target,
-            penalty_adjustment_period=cfg.penalty_adjustment_period,
             verbose=verbose,
         ),
     )
