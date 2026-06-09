@@ -229,12 +229,12 @@ def print_simulation_validation(validation_result: dict, log_path) -> None:
 
     if blocked:
         print(f"  Blocked-edge violations : {len(blocked)}")
-        route_id, node_a, node_b, depart_time, arrival_time, block_time = blocked[0]
-        print(
-            f"    first: route {route_id} used edge {node_a} <-> {node_b}"
-            f" between t={depart_time:.3f}min and t={arrival_time:.3f}min,"
-            f" but it was blocked at t={block_time:.3f}min"
-        )
+        for idx, (route_id, node_a, node_b, depart_time, arrival_time, block_time) in enumerate(blocked, start=1):
+            print(
+                f"    {idx}. route {route_id} used edge {node_a} <-> {node_b}"
+                f" between t={depart_time:.3f}min and t={arrival_time:.3f}min,"
+                f" but it was blocked at t={block_time:.3f}min"
+            )
     else:
         print("  Blocked-edge violations : none")
 
