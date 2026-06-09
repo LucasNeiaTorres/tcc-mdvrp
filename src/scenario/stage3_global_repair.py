@@ -201,6 +201,7 @@ def stage3_global_cross_depot_repair(
 	best_infeasible: _InsertionEvaluation | None = None
 	scanned_vehicle_count = 0
 	eligible_vehicle_count = 0
+	vehicles_with_hard_feasible_insertion_count = 0
 	routes_with_open_insertion_count = 0
 	routes_all_insertions_blocked_count = 0
 
@@ -244,6 +245,7 @@ def stage3_global_cross_depot_repair(
 		suffix = route_customers[suffix_start:]
 		edge_count = len(suffix)  # suffix nodes + depot yields exactly len(suffix) edges.
 		route_has_open_insertion = False
+		vehicle_has_hard_feasible_insertion = False
 		for edge_position in range(edge_count):
 			evaluation = _evaluate_insertion(
 				state=state,
@@ -260,6 +262,9 @@ def stage3_global_cross_depot_repair(
 				continue
 
 			route_has_open_insertion = True
+			# In this scenario, hard constraints are only blocked-edge traversals.
+			# Any non-None evaluation has already passed that hard filter.
+			vehicle_has_hard_feasible_insertion = True
 
 			if _is_hard_feasible(evaluation):
 				if (
@@ -283,15 +288,33 @@ def stage3_global_cross_depot_repair(
 			):
 				best_infeasible = evaluation
 
+		if vehicle_has_hard_feasible_insertion:
+			vehicles_with_hard_feasible_insertion_count += 1
+
 		if route_has_open_insertion:
 			routes_with_open_insertion_count += 1
 		else:
 			routes_all_insertions_blocked_count += 1
 
 	print(f"[Stage 3][INFO] Scanned {scanned_vehicle_count} candidate vehicles globally.")
+	print(
+		"[Stage 3][INFO] Vehicles with at least 1 blocked-edge-safe insertion "
+		"(hard constraints): "
+		f"{vehicles_with_hard_feasible_insertion_count}."
+	)
 	if diagnostics_out is not None:
 		diagnostics_out["active_other_routes_count"] = scanned_vehicle_count
 		diagnostics_out["eligible_other_routes_count"] = eligible_vehicle_count
+		diagnostics_out[
+			"vehicles_with_hard_feasible_insertion_count"
+		] = vehicles_with_hard_feasible_insertion_count
+		diagnostics_out[
+			"vehicles_with_blocked_edge_safe_insertion_count"
+		] = vehicles_with_hard_feasible_insertion_count
+		# Backward-compatible alias for previous key naming.
+		diagnostics_out[
+			"routes_with_hard_feasible_insertion_count"
+		] = vehicles_with_hard_feasible_insertion_count
 		diagnostics_out["routes_with_open_insertion_count"] = routes_with_open_insertion_count
 		diagnostics_out["routes_all_insertions_blocked_count"] = routes_all_insertions_blocked_count
 

@@ -197,14 +197,34 @@ def _register_stage3_unserved_reason(
     customer_id: int,
     diagnostics: dict[str, int] | None,
     *,
+    stage3_attempt_stats: dict[str, int] | None = None,
     unserved_no_active_route_ids: set[int],
     unserved_no_route_without_broken_edge_ids: set[int],
     unserved_mixed_reason_ids: set[int],
 ) -> None:
     """Classify Stage-3 unserved reason from diagnostics and store exclusive buckets."""
-    active_other_routes = int((diagnostics or {}).get("active_other_routes_count", 0))
-    eligible_other_routes = int((diagnostics or {}).get("eligible_other_routes_count", 0))
-    routes_with_open_insertion = int((diagnostics or {}).get("routes_with_open_insertion_count", 0))
+    diag = diagnostics or {}
+    active_other_routes = int(diag.get("active_other_routes_count", 0))
+    eligible_other_routes = int(diag.get("eligible_other_routes_count", 0))
+    routes_with_open_insertion = int(diag.get("routes_with_open_insertion_count", 0))
+    vehicles_with_blocked_edge_safe_insertion = int(
+        diag.get(
+            "vehicles_with_blocked_edge_safe_insertion_count",
+            diag.get(
+                "vehicles_with_hard_feasible_insertion_count",
+                diag.get("routes_with_hard_feasible_insertion_count", 0),
+            ),
+        )
+    )
+
+    if (
+        stage3_attempt_stats is not None
+        and "active_other_routes_count" in diag
+        and vehicles_with_blocked_edge_safe_insertion == 0
+    ):
+        stage3_attempt_stats["no_hard_feasible_insertions"] = (
+            stage3_attempt_stats.get("no_hard_feasible_insertions", 0) + 1
+        )
 
     no_active_route_besides_current = active_other_routes == 0
     no_route_without_broken_edge = routes_with_open_insertion == 0
@@ -290,6 +310,7 @@ def _run_cascade_drop_protocol(
     event_queue: EventQueue,
     current_time: float,
     forced_unserved_customer_ids: set[int],
+    stage3_attempt_stats: dict[str, int] | None,
     target_unserved_diagnostics: dict[str, int] | None,
     unserved_no_active_route_ids: set[int],
     unserved_no_route_without_broken_edge_ids: set[int],
@@ -336,6 +357,7 @@ def _run_cascade_drop_protocol(
                 _register_stage3_unserved_reason(
                     customer.index,
                     target_unserved_diagnostics,
+                    stage3_attempt_stats=stage3_attempt_stats,
                     unserved_no_active_route_ids=unserved_no_active_route_ids,
                     unserved_no_route_without_broken_edge_ids=unserved_no_route_without_broken_edge_ids,
                     unserved_mixed_reason_ids=unserved_mixed_reason_ids,
@@ -400,6 +422,7 @@ def _run_cascade_drop_protocol(
         _register_stage3_unserved_reason(
             blocked_customer.index,
             cascade_target_diagnostics,
+            stage3_attempt_stats=stage3_attempt_stats,
             unserved_no_active_route_ids=unserved_no_active_route_ids,
             unserved_no_route_without_broken_edge_ids=unserved_no_route_without_broken_edge_ids,
             unserved_mixed_reason_ids=unserved_mixed_reason_ids,
@@ -1282,6 +1305,7 @@ def run_simulation(
     unserved_no_active_route_ids: set[int] = set()
     unserved_no_route_without_broken_edge_ids: set[int] = set()
     unserved_mixed_reason_ids: set[int] = set()
+    stage3_attempt_stats: dict[str, int] = {"no_hard_feasible_insertions": 0}
     runtime_settings = _build_runtime_settings(cfg)
 
     # Main simulation loop: process events in chronological order
@@ -1315,6 +1339,7 @@ def run_simulation(
                 blocked_edges,
                 runtime_settings,
                 forced_unserved_customer_ids,
+                stage3_attempt_stats,
                 unserved_no_active_route_ids,
                 unserved_no_route_without_broken_edge_ids,
                 unserved_mixed_reason_ids,
@@ -1555,6 +1580,10 @@ def run_simulation(
                 "Unserved (mixed: no active route + no route without broken edge): "
                 f"{unserved_due_mixed_stage3_reason}"
             )
+        print(
+            "Stage 3 attempts (no hard-feasible insertion / hard constraints): "
+            f"{stage3_attempt_stats.get('no_hard_feasible_insertions', 0)}"
+        )
     else:
         print(f"Unserved rate/customers : {unserved_rate_formatted} | none")
 
@@ -1663,6 +1692,9 @@ def run_simulation(
             "unserved_mixed_no_active_and_no_safe_route_customers": (
                 unserved_due_mixed_stage3_reason
             ),
+            "stage3_attempts_without_hard_feasible_insertion_count": int(
+                stage3_attempt_stats.get("no_hard_feasible_insertions", 0)
+            ),
             "unserved_rate_percent": round(unserved_rate_percent, 2),
             "unserved_rate": unserved_rate_formatted,
             "feasible": routes_feasible_now,
@@ -1713,6 +1745,7 @@ def _handle_disaster(
     blocked_edges: set[tuple[int, int]],
     runtime_settings: SimulationRuntimeSettings,
     forced_unserved_customer_ids: set[int],
+    stage3_attempt_stats: dict[str, int],
     unserved_no_active_route_ids: set[int],
     unserved_no_route_without_broken_edge_ids: set[int],
     unserved_mixed_reason_ids: set[int],
@@ -1992,6 +2025,7 @@ def _handle_disaster(
                     event_queue=event_queue,
                     current_time=current_time,
                     forced_unserved_customer_ids=forced_unserved_customer_ids,
+                    stage3_attempt_stats=stage3_attempt_stats,
                     target_unserved_diagnostics=stage3_target_diagnostics,
                     unserved_no_active_route_ids=unserved_no_active_route_ids,
                     unserved_no_route_without_broken_edge_ids=unserved_no_route_without_broken_edge_ids,
@@ -2085,6 +2119,7 @@ def _handle_disaster(
                     event_queue=event_queue,
                     current_time=current_time,
                     forced_unserved_customer_ids=forced_unserved_customer_ids,
+                    stage3_attempt_stats=stage3_attempt_stats,
                     target_unserved_diagnostics=None,
                     unserved_no_active_route_ids=unserved_no_active_route_ids,
                     unserved_no_route_without_broken_edge_ids=unserved_no_route_without_broken_edge_ids,
