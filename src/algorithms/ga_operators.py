@@ -10,6 +10,7 @@ from typing import Callable, List
 
 import numpy as np
 from pymoo.core.mutation import Mutation
+from pymoo.core.population import Population
 from pymoo.core.sampling import Sampling
 from pymoo.core.survival import Survival
 
@@ -210,20 +211,27 @@ class WellSpacedSurvival(Survival):
     the well-spaced condition from Prins (2004): |F(P1) - F(P2)| >= delta
     for all pairs in the surviving population.
 
-    If fewer than n_survive well-spaced individuals exist, the remainder is
-    filled with the best remaining individuals (least-bad clones), matching
-    the paper's truncation behaviour.
+    If fewer than n_survive well-spaced individuals exist, a fraction
+    ``reinject_ratio`` of the fill slots are replaced with freshly evaluated
+    random permutations (diversity reinjection) instead of least-bad clones.
+    This combats premature convergence when the population collapses.
 
     Parameters
     ----------
     delta:
         Minimum fitness spacing. delta=1.0 enforces distinct integer costs.
+    reinject_ratio:
+        Fraction of clone-fill slots replaced with random individuals.
+        0.0 = original behaviour (all fills are clones).
+        1.0 = all fill slots replaced with fresh random permutations.
     """
 
-    def __init__(self, delta: float = 1.0) -> None:
+    def __init__(self, delta: float = 1.0, reinject_ratio: float = 0.5) -> None:
         super().__init__(filter_infeasible=False)
         self.delta = delta
+        self.reinject_ratio = reinject_ratio
         self.eliminated_count: int = 0
+        self._rng = np.random.default_rng()
 
     def _do(self, problem, pop, n_survive, **kwargs):
         F = pop.get("F").flatten()
@@ -241,11 +249,34 @@ class WellSpacedSurvival(Survival):
             else:
                 clones.append(i)
 
-        # Clones that are truly discarded (not needed as fill)
         n_fill = max(0, n_survive - len(kept))
-        self.eliminated_count += len(clones) - n_fill
+        n_random = int(n_fill * self.reinject_ratio)
+        n_clone_fill = n_fill - n_random
 
-        if n_fill > 0:
-            kept.extend(clones[:n_fill])
+        # Clones truly discarded: those not used as fill (replaced by fresh or unneeded)
+        self.eliminated_count += len(clones) - n_clone_fill
 
-        return pop[kept[:n_survive]]
+        kept.extend(clones[:n_clone_fill])
+        survivors = pop[kept[:n_survive]]
+
+        if n_random > 0 and problem.n_var > 1:
+            random_X = np.array(
+                [self._rng.permutation(problem.n_var) for _ in range(n_random)],
+                dtype=int,
+            )
+            fresh = Population.new(X=random_X)
+
+            # Evaluate fresh individuals — use the algorithm's evaluator when
+            # available (proper pymoo path), fall back to direct _evaluate.
+            algorithm = kwargs.get("algorithm")
+            if algorithm is not None:
+                algorithm.evaluator.eval(problem, fresh)
+            else:
+                for ind in fresh:
+                    out: dict = {}
+                    problem._evaluate(ind.get("X"), out)
+                    ind.set("F", np.array([out["F"]], dtype=float))
+
+            survivors = Population.merge(survivors, fresh)
+
+        return survivors[:n_survive]

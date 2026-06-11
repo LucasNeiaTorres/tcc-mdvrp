@@ -120,7 +120,7 @@ def run_ga_routing(
             customers=customers,
             start_node=depot,
             dist_fn=dist_fn,
-            n_heuristic=max(1, cfg.pop_size // 5),
+            n_heuristic=max(1, cfg.pop_size // 10),
         ),
         crossover=OrderCrossover(),
         mutation=LSMutation(
@@ -133,7 +133,7 @@ def run_ga_routing(
             duration_penalty=cfg.duration_penalty,
             granularity=ls_cfg.granularity,
         ),
-        survival=WellSpacedSurvival(delta=cfg.clone_delta),
+        survival=WellSpacedSurvival(delta=cfg.clone_delta, reinject_ratio=cfg.reinject_ratio),
         eliminate_duplicates=True,
         n_offsprings=cfg.n_offsprings,
     )
