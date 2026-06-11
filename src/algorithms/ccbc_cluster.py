@@ -52,9 +52,6 @@ from core.entities import Customer, Depot
 from utils.config import CCBCConfig
 from utils.metrics import euclidean_distance
 
-# TODO: replace to use config seed
-_RNG_SEED = 42
-
 def _build_slots(depots: List[Depot]) -> Tuple[List[Depot], List[float], List[float]]:
     """
     Expand depots into individual vehicle slots.
@@ -82,8 +79,8 @@ def _build_slots(depots: List[Depot]) -> Tuple[List[Depot], List[float], List[fl
 def _simple_kmeans_centroids(
     points: List[Tuple[float, float]],
     k: int,
+    rng: random.Random,
     max_iter: int = 30,
-    rng: Optional[random.Random] = None,
 ) -> List[Tuple[float, float]]:
     """
     Run uncapacitated k-means on a list of (x, y) points.
@@ -96,8 +93,7 @@ def _simple_kmeans_centroids(
     if len(points) <= k:
         return list(points)
 
-    _rng = rng or random.Random(_RNG_SEED)
-    centroids = _rng.sample(points, k)
+    centroids = rng.sample(points, k)
 
     for _ in range(max_iter):
         clusters: List[List[Tuple[float, float]]] = [[] for _ in range(k)]
@@ -573,7 +569,7 @@ def run_ccbc_clustering(
     else:
         sigma = 1.0
 
-    rng = random.Random(_RNG_SEED)
+    rng = random.Random(cfg.seed)
 
     best_assignment: Optional[List[int]] = None
     best_cost = float("inf")

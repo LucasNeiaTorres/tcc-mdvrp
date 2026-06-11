@@ -1,4 +1,5 @@
 ccbc:
+  seed: 42
   max_iter: 300
   tol: 1.0e-4
   n_starts: 5

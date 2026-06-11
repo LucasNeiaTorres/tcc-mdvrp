@@ -96,17 +96,18 @@ class HeuristicSampling(Sampling):
         start_node,
         dist_fn: Callable[[int, int], float],
         n_heuristic: int = 1,
+        seed: int = 42,
     ) -> None:
         super().__init__()
         self.customers = customers
         self.start_node = start_node
         self.dist_fn = dist_fn
         self.n_heuristic = n_heuristic
+        self._rng = np.random.default_rng(seed)
 
     def _do(self, problem, n_samples: int, **kwargs) -> np.ndarray:
         n = len(self.customers)
         X = np.empty((n_samples, n), dtype=int)
-        rng = np.random.default_rng()
         n_heuristic = min(self.n_heuristic, n_samples)
 
         # First: deterministic NN from start_node (nearest customer first)
@@ -117,14 +118,14 @@ class HeuristicSampling(Sampling):
 
         # Remaining heuristic individuals: NN with random starting customers
         for i in range(1, n_heuristic):
-            first_pos = int(rng.integers(0, n))
+            first_pos = int(self._rng.integers(0, n))
             X[i] = _nearest_neighbor_permutation(
                 self.customers, self.start_node, self.dist_fn, first_pos=first_pos
             )
 
         # Fill the rest with random permutations
         for i in range(n_heuristic, n_samples):
-            X[i] = rng.permutation(n)
+            X[i] = self._rng.permutation(n)
 
         return X
 
@@ -160,6 +161,7 @@ class LSMutation(Mutation):
         capacity_penalty: float,
         duration_penalty: float,
         granularity: int = 0,
+        seed: int = 42,
     ) -> None:
         super().__init__(prob=prob)
         self.depot = depot
@@ -169,6 +171,7 @@ class LSMutation(Mutation):
         self.capacity_penalty = capacity_penalty
         self.duration_penalty = duration_penalty
         self.granularity = granularity
+        self._rng = np.random.default_rng(seed)
         # Map customer object → position in customers list for re-encoding
         self._customer_pos = {c: i for i, c in enumerate(customers)}
 
@@ -178,9 +181,8 @@ class LSMutation(Mutation):
         if n <= 1:
             return X
 
-        rng = np.random.default_rng()
         for k in range(len(X)):
-            if rng.random() >= self.prob.value:
+            if self._rng.random() >= self.prob.value:
                 continue
 
             ordered = [self.customers[i] for i in X[k]]
@@ -226,12 +228,12 @@ class WellSpacedSurvival(Survival):
         1.0 = all fill slots replaced with fresh random permutations.
     """
 
-    def __init__(self, delta: float = 1.0, reinject_ratio: float = 0.5) -> None:
+    def __init__(self, delta: float = 1.0, reinject_ratio: float = 0.5, seed: int = 42) -> None:
         super().__init__(filter_infeasible=False)
         self.delta = delta
         self.reinject_ratio = reinject_ratio
         self.eliminated_count: int = 0
-        self._rng = np.random.default_rng()
+        self._rng = np.random.default_rng(seed)
 
     def _do(self, problem, pop, n_survive, **kwargs):
         F = pop.get("F").flatten()

@@ -121,6 +121,7 @@ def run_ga_routing(
             start_node=depot,
             dist_fn=dist_fn,
             n_heuristic=max(1, cfg.pop_size // 10),
+            seed=cfg.seed,
         ),
         crossover=OrderCrossover(),
         mutation=LSMutation(
@@ -132,8 +133,9 @@ def run_ga_routing(
             capacity_penalty=cfg.capacity_penalty,
             duration_penalty=cfg.duration_penalty,
             granularity=ls_cfg.granularity,
+            seed=cfg.seed,
         ),
-        survival=WellSpacedSurvival(delta=cfg.clone_delta, reinject_ratio=cfg.reinject_ratio),
+        survival=WellSpacedSurvival(delta=cfg.clone_delta, reinject_ratio=cfg.reinject_ratio, seed=cfg.seed),
         eliminate_duplicates=True,
         n_offsprings=cfg.n_offsprings,
     )

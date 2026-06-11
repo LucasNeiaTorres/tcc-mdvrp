@@ -18,6 +18,7 @@ class CCBCConfig:
     n_starts: int
     capacity_balance_target: float
     duration_estimate_slack: float
+    seed: int = 42
     outlier_reassign_distance_delta: float = 5.0
 
 
@@ -40,7 +41,7 @@ class GAConfig:
     capacity_penalty: float
     duration_penalty: float
     n_offsprings: int
-    reinject_ratio: float
+    reinject_ratio: float = 0.5
 
 
 @dataclass
@@ -83,6 +84,7 @@ def load_config(path: Optional[str] = None) -> AppConfig:
 
     return AppConfig(
         ccbc=CCBCConfig(
+            seed=int(ccbc_raw.get("seed", ga_raw.get("seed", 42))),
             max_iter=int(ccbc_raw["max_iter"]),
             tol=float(ccbc_raw["tol"]),
             n_starts=int(ccbc_raw["n_starts"]),
