@@ -18,6 +18,7 @@ class CCBCConfig:
     n_starts: int
     capacity_balance_target: float
     duration_estimate_slack: float
+    outlier_reassign_distance_delta: float = 5.0
 
 
 @dataclass
@@ -39,6 +40,7 @@ class GAConfig:
     capacity_penalty: float
     duration_penalty: float
     n_offsprings: int
+    reinject_ratio: float
 
 
 @dataclass
@@ -84,6 +86,7 @@ def load_config(path: Optional[str] = None) -> AppConfig:
             max_iter=int(ccbc_raw["max_iter"]),
             tol=float(ccbc_raw["tol"]),
             n_starts=int(ccbc_raw["n_starts"]),
+            outlier_reassign_distance_delta=float(ccbc_raw["outlier_reassign_distance_delta"]),
             capacity_balance_target=float(ccbc_raw["capacity_balance_target"]),
             duration_estimate_slack=float(ccbc_raw["duration_estimate_slack"]),
         ),
@@ -99,6 +102,7 @@ def load_config(path: Optional[str] = None) -> AppConfig:
             capacity_penalty=float(ga_raw["capacity_penalty"]),
             duration_penalty=float(ga_raw["duration_penalty"]),
             n_offsprings=int(ga_raw["n_offsprings"]),
+            reinject_ratio=float(ga_raw.get("reinject_ratio", 0.5)),
         ),
         local_search=LocalSearchConfig(
             max_iterations=int(ls_raw["max_iterations"]),
