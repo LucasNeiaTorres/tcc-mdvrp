@@ -1375,6 +1375,15 @@ class Visualizer:
     def _update(self, _frame_index: int) -> list[Any]:
         now = time.perf_counter()
         dt = max(0.0, now - self._last_wall_time)
+        # Cap dt to one expected frame duration. Without this, a frame that
+        # spends extra wall-time processing a burst of edge_block events will
+        # inflate dt, advancing sim_time by a large jump on the next frame.
+        # That causes (a) apparent speed spikes for vehicles crossing a
+        # segment boundary in the oversized step, and (b) multiple reroute
+        # snapshots being applied in quick succession, making the future-route
+        # polyline flicker.  The cap keeps animation speed consistent even
+        # when event-processing cost varies between frames.
+        dt = min(dt, 1.0 / max(1, self.fps))
         self._last_wall_time = now
 
         if not self.paused:
