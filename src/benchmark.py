@@ -19,7 +19,9 @@ Usage
 """
 
 import argparse
+import random
 import time
+from collections import defaultdict
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -77,11 +79,13 @@ def _row(r: _InstanceResult) -> str:
     ])
 
 
-def run_benchmark(instance_names: list[str]) -> None:
-    cfg = load_config()
+def run_benchmark(instance_names: list[str], cfg, run_label: str | None = None) -> list[_InstanceResult]:
     algorithm = CCBCGAAlgorithm(cfg, debug=False)
 
+    if run_label is not None:
+        print(f"\n{run_label}")
     print(f"\nAlgorithm : {algorithm}")
+    print(f"Seeds     : ccbc={cfg.ccbc.seed}, ga={cfg.ga.seed}")
     print(f"Instances : {len(instance_names)}\n")
     print(_header_line())
     print(_separator())
@@ -114,6 +118,7 @@ def run_benchmark(instance_names: list[str]) -> None:
 
     print(_separator())
     _print_summary(results)
+    return results
 
 
 def _print_summary(results: list[_InstanceResult]) -> None:
@@ -151,6 +156,31 @@ def _print_summary(results: list[_InstanceResult]) -> None:
             print(f"    {r.name:<10}  {r.gap:+6.1f}%  {bar}")
 
 
+def _print_multi_run_summary(all_runs: list[list[_InstanceResult]]) -> None:
+    """Print per-instance aggregate metrics across multiple benchmark executions."""
+    if not all_runs:
+        return
+
+    by_instance: dict[str, list[_InstanceResult]] = defaultdict(list)
+    for run_results in all_runs:
+        for r in run_results:
+            by_instance[r.name].append(r)
+
+    print(f"\n{'Aggregate Summary Across Runs':=<80}")
+    print(f"  Runs executed: {len(all_runs)}")
+    print("  Per-instance metrics across all executions:")
+    print("  Instance     Mean Gap %    Feasible")
+    print("  -----------  -----------   --------")
+
+    for name in sorted(by_instance):
+        rows = by_instance[name]
+        gaps = [r.gap for r in rows if r.gap is not None]
+        mean_gap_str = f"{(sum(gaps) / len(gaps)):+.2f}%" if gaps else "N/A"
+        feasible_count = sum(1 for r in rows if r.feasible)
+        feasible_str = f"{feasible_count}/{len(rows)} ({(100.0 * feasible_count / len(rows)):.1f}%)"
+        print(f"  {name:<11}  {mean_gap_str:<11}   {feasible_str}")
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="Benchmark MDVRP solver on Cordeau instances.")
     parser.add_argument(
@@ -165,6 +195,17 @@ def main() -> None:
         default="all",
         help="Which instance set to run when --instances is not provided (default: all).",
     )
+    parser.add_argument(
+        "--seed",
+        type=int,
+        help="Override both ccbc.seed and ga.seed for deterministic runs.",
+    )
+    parser.add_argument(
+        "--seed-runs",
+        type=int,
+        default=1,
+        help="Run benchmark N times with random seeds (default: 1).",
+    )
     args = parser.parse_args()
 
     if args.instances:
@@ -176,7 +217,31 @@ def main() -> None:
     else:
         names = _P_INSTANCES + _PR_INSTANCES
 
-    run_benchmark(names)
+    if args.seed_runs < 1:
+        raise ValueError("--seed-runs must be >= 1")
+
+    if args.seed_runs == 1:
+        cfg = load_config()
+        if args.seed is not None:
+            cfg.ccbc.seed = args.seed
+            cfg.ga.seed = args.seed
+        run_benchmark(names, cfg)
+        return
+
+    if args.seed is not None:
+        print("[warning] --seed is ignored when --seed-runs > 1")
+
+    seed_rng = random.SystemRandom()
+    all_runs: list[list[_InstanceResult]] = []
+    for run_idx in range(1, args.seed_runs + 1):
+        seed = seed_rng.randint(1, 1_000_000)
+        cfg = load_config()
+        cfg.ccbc.seed = seed
+        cfg.ga.seed = seed
+        run_results = run_benchmark(names, cfg, run_label=f"Run {run_idx}/{args.seed_runs} | seed={seed}")
+        all_runs.append(run_results)
+
+    _print_multi_run_summary(all_runs)
 
 
 if __name__ == "__main__":
