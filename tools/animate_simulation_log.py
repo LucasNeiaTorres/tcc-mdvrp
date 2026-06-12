@@ -237,6 +237,20 @@ def load_reroute_snapshots(results_dir: Path, instance_name: str) -> list[Rerout
             from_node = _as_int(vehicle.get("current_node_index"))
             if route_id is None or from_node is None:
                 continue
+
+            # Prefer explicit wasted_to_node (cascade fixed_next U-turn).
+            wasted_to_node_field = _as_int(vehicle.get("wasted_to_node"))
+            if wasted_to_node_field is not None:
+                u_turns_list.append(UTurnInfo(
+                    route_id=route_id,
+                    from_node=from_node,
+                    to_node=wasted_to_node_field,
+                    edge_break_t=time_minutes,
+                    elapsed=wasted / 2.0,
+                ))
+                continue
+
+            # Fallback: infer from broken edge (on-broken-edge U-turn).
             if len(broken_edge) < 2 or from_node not in broken_edge:
                 continue
             to_node = next((n for n in broken_edge if n != from_node), None)
@@ -308,8 +322,10 @@ def _inject_u_turn_segments(
                 not inserted
                 and seg.kind == "travel"
                 and seg.from_node == u.from_node
+                and seg.to_node == u.to_node
                 and seg.start <= departure_t + 0.5
                 and seg.start >= departure_t - 0.5
+                and seg.end >= u.edge_break_t - EPS
             ):
                 # 1. Outbound: travel to the actual on-edge position at normal speed
                 new_timeline.append(Segment(

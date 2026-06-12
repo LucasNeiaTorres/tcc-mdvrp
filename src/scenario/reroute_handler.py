@@ -62,6 +62,7 @@ def build_reroute_vehicle_payload(
     rerouted_route: Route,
     wasted_travel_time: float = 0.0,
     wasted_travel_distance: float = 0.0,
+    wasted_to_node: int | None = None,
 ) -> dict[str, Any]:
     """Build the payload for a rerouted vehicle snapshot."""
     def _path_payload(
@@ -121,6 +122,7 @@ def build_reroute_vehicle_payload(
         "pending_customer_indices": sorted(vehicle_state.pending_customer_ids),
         "wasted_travel_time": wasted_travel_time,
         "wasted_travel_distance": wasted_travel_distance,
+        "wasted_to_node": wasted_to_node,
         "executed_path": executed_payload,
         "future_path": future_payload,
         "full_route": {

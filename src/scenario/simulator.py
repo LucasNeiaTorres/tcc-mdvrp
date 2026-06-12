@@ -1030,6 +1030,7 @@ def _commit_stage3_updates(
     wasted_travel_distance: float,
     affected_route_id: int,
     cascade_hero_route_ids: list[int] | None = None,
+    wasted_to_node: int | None = None,
 ) -> None:
     blocked_state = vehicle_states[affected_route_id]
     affected_executed_count = max(0, blocked_state.next_stop_index - 1)
@@ -1095,6 +1096,7 @@ def _commit_stage3_updates(
             rerouted_route=affected_future_route,
             wasted_travel_time=wasted_travel_time,
             wasted_travel_distance=wasted_travel_distance,
+            wasted_to_node=wasted_to_node,
         )
     ]
 
@@ -1832,6 +1834,7 @@ def _handle_disaster(
     accepted_stage_key: str | None = None
     stage3_failure_hero_route_ids: list[int] = []
     stage3_routes_snapshot: dict[int, Route] | None = None
+    cascade_wasted_to_node: int | None = None
 
     executed_count = max(0, affected_vehicle_state.next_stop_index - 1)
     executed_customers = original_route.customers[:executed_count]
@@ -2039,7 +2042,30 @@ def _handle_disaster(
                         not stabilized_future_customers
                         or stabilized_future_customers[0].index != fixed_next_customer.index
                     ):
+                        u_turn_elapsed = 0.0
+                        if affected_vehicle_state.status == "en_route" and travel_to_next > 0.0:
+                            full_leg_travel = travel_time(current_node, fixed_next_customer)
+                            u_turn_elapsed = max(0.0, full_leg_travel - travel_to_next)
+
+                        if u_turn_elapsed > 0.0:
+                            extra_wasted_time = u_turn_elapsed * 2.0
+                            extra_wasted_distance = extra_wasted_time * UNIT_SPEED
+                            wasted_travel_time += extra_wasted_time
+                            wasted_travel_distance += extra_wasted_distance
+                            historical_wasted_duration += extra_wasted_time
+                            historical_wasted_distance += extra_wasted_distance
+                            event_start_node = current_node
+                            reroute_start_time = current_time + u_turn_elapsed
+                            print(
+                                "Stage 3 donor cleanup: fixed_next removed during cascade; "
+                                f"applying U-turn (elapsed={u_turn_elapsed:.2f}min, "
+                                f"extra_waste={extra_wasted_distance:.2f})."
+                            )
+
                         # Fixed-next commitment was removed during cascade.
+                        cascade_wasted_to_node: int | None = (
+                            fixed_next_customer.index if u_turn_elapsed > 0.0 else None
+                        )
                         fixed_next_customer = None
                         travel_to_next = 0.0
 
@@ -2128,6 +2154,50 @@ def _handle_disaster(
                     penalty_overtime_per_minute=penalty_overtime_per_minute,
                 )
 
+                # If cascade removed the committed fixed-next customer from donor front,
+                # drop commitment and force full reroute scheduling (U-turn semantics).
+                donor_wasted_to_node: int | None = None
+                if donor_fixed_next is not None and (
+                    not stabilized_future_customers
+                    or stabilized_future_customers[0].index != donor_fixed_next.index
+                ):
+                    u_turn_elapsed = 0.0
+                    if affected_vehicle_state.status == "en_route" and donor_travel_to_next > 0.0:
+                        full_leg_travel = travel_time(current_node, donor_fixed_next)
+                        u_turn_elapsed = max(0.0, full_leg_travel - donor_travel_to_next)
+
+                    if u_turn_elapsed > 0.0:
+                        extra_wasted_time = u_turn_elapsed * 2.0
+                        extra_wasted_distance = extra_wasted_time * UNIT_SPEED
+                        wasted_travel_time += extra_wasted_time
+                        wasted_travel_distance += extra_wasted_distance
+
+                        affected_vehicle_state.route = Route(
+                            depot=affected_vehicle_state.route.depot,
+                            customers=list(affected_vehicle_state.route.customers),
+                            wasted_duration=affected_vehicle_state.route.wasted_duration + extra_wasted_time,
+                            wasted_distance=affected_vehicle_state.route.wasted_distance + extra_wasted_distance,
+                        )
+
+                        event_start_node = current_node
+                        reroute_start_time = current_time + u_turn_elapsed
+                        print(
+                            "Stage 3 donor cleanup: fixed_next removed during cascade; "
+                            f"applying U-turn (elapsed={u_turn_elapsed:.2f}min, "
+                            f"extra_waste={extra_wasted_distance:.2f})."
+                        )
+                    else:
+                        print(
+                            "Stage 3 donor cleanup: fixed_next removed during cascade; "
+                            "switching to full reroute (no fixed-next commitment)."
+                        )
+
+                    donor_wasted_to_node: int | None = (
+                        donor_fixed_next.index if u_turn_elapsed > 0.0 else None
+                    )
+                    donor_fixed_next = None
+                    donor_travel_to_next = 0.0
+
                 _commit_stage3_updates(
                     winner_state=vehicle_states[rescued_state.route_id],
                     target_node=target_node,
@@ -2152,6 +2222,7 @@ def _handle_disaster(
                     wasted_travel_distance=wasted_travel_distance,
                     affected_route_id=affected_route,
                     cascade_hero_route_ids=cascade_hero_route_ids,
+                    wasted_to_node=donor_wasted_to_node,
                 )
 
                 if rescued_count > 0 or dropped_count > 0:
@@ -2170,6 +2241,7 @@ def _handle_disaster(
             rerouted_route=new_route,
             wasted_travel_time=wasted_travel_time,
             wasted_travel_distance=wasted_travel_distance,
+            wasted_to_node=cascade_wasted_to_node,
         )
     ]
 
