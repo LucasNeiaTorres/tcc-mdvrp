@@ -23,7 +23,7 @@ import random
 import time
 from collections import defaultdict
 from dataclasses import dataclass
-from pathlib import Path
+from statistics import median
 
 from algorithms.ccbc_ga import CCBCGAAlgorithm
 from utils.config import load_config
@@ -31,6 +31,7 @@ from utils.converter import load_instance
 
 _P_INSTANCES = [f"p{i:02d}" for i in range(1, 24)]
 _PR_INSTANCES = [f"pr{i:02d}" for i in range(1, 11)]
+_AUTHOR_ORDER = ("Christofides", "Gillett", "Chao", "Cordeau", "Unknown")
 
 # Column widths:  Instance  Cust  Dep  Routes  Reference   Algorithm   Gap %   Feasible  Time(s)
 _COL_W = (10, 6, 4, 7, 12, 12, 7, 9, 8)
@@ -77,6 +78,27 @@ def _row(r: _InstanceResult) -> str:
         str(r.feasible).ljust(_COL_W[7]),
         f"{r.elapsed:.1f}".ljust(_COL_W[8]),
     ])
+
+
+def _author_from_instance(name: str) -> str:
+    if name.startswith("pr"):
+        return "Cordeau"
+    if name.startswith("p"):
+        idx = int(name[1:])
+        if 1 <= idx <= 7:
+            return "Christofides"
+        if 8 <= idx <= 11:
+            return "Gillett"
+        if 12 <= idx <= 23:
+            return "Chao"
+    return "Unknown"
+
+
+def _author_sort_key(author: str) -> int:
+    try:
+        return _AUTHOR_ORDER.index(author)
+    except ValueError:
+        return len(_AUTHOR_ORDER)
 
 
 def run_benchmark(instance_names: list[str], cfg, run_label: str | None = None) -> list[_InstanceResult]:
@@ -169,16 +191,144 @@ def _print_multi_run_summary(all_runs: list[list[_InstanceResult]]) -> None:
     print(f"\n{'Aggregate Summary Across Runs':=<80}")
     print(f"  Runs executed: {len(all_runs)}")
     print("  Per-instance metrics across all executions:")
-    print("  Instance     Mean Gap %    Feasible")
-    print("  -----------  -----------   --------")
-
+    print("  Instance     BKS          Best Cost   Mean Cost   Gap %      Feasible  Time (s)")
+    print("  -----------  -----------  -----------  -----------  ----------  ---------  --------")
+    
     for name in sorted(by_instance):
         rows = by_instance[name]
         gaps = [r.gap for r in rows if r.gap is not None]
-        mean_gap_str = f"{(sum(gaps) / len(gaps)):+.2f}%" if gaps else "N/A"
+        
+        # Best cost across all runs
+        best_cost = min(r.cost for r in rows)
+        
+        # Mean cost across all runs
+        mean_cost = sum(r.cost for r in rows) / len(rows)
+        
+        # Mean gap across all runs
+        mean_gap = sum(gaps) / len(gaps) if gaps else None
+        mean_gap_str = f"{mean_gap:+.2f}%" if mean_gap is not None else "N/A"
+        
+        # Feasibility rate
         feasible_count = sum(1 for r in rows if r.feasible)
-        feasible_str = f"{feasible_count}/{len(rows)} ({(100.0 * feasible_count / len(rows)):.1f}%)"
-        print(f"  {name:<11}  {mean_gap_str:<11}   {feasible_str}")
+        feasible_pct = (100.0 * feasible_count / len(rows))
+        
+        # Average time
+        avg_time = sum(r.elapsed for r in rows) / len(rows)
+        
+        # Reference (BKS)
+        bks_str = f"{rows[0].ref:.2f}" if rows[0].ref is not None else "N/A"
+        
+        print(f"  {name:<11}  {bks_str:<11}  {best_cost:<11.2f}  {mean_cost:<11.2f}  {mean_gap_str:<10}  {feasible_pct:>6.1f}%  {avg_time:>7.2f}")
+
+    by_author: dict[str, list[_InstanceResult]] = defaultdict(list)
+    for rows in by_instance.values():
+        author = _author_from_instance(rows[0].name)
+        by_author[author].extend(rows)
+
+    print("\n  Author summary (for table-resumo):")
+    print("  Author         Gap Mean %   Gap Median % Feasible %   Time Mean(s) #Inst")
+    print("  -------------  -----------  ------------ ----------   ------------ -----")
+    for author in sorted(by_author, key=_author_sort_key):
+        rows = by_author[author]
+        gaps = [r.gap for r in rows if r.gap is not None]
+        mean_gap = sum(gaps) / len(gaps) if gaps else None
+        median_gap = median(gaps) if gaps else None
+        feasible_pct = 100.0 * sum(1 for r in rows if r.feasible) / len(rows)
+        mean_time = sum(r.elapsed for r in rows) / len(rows)
+        n_inst = len({r.name for r in rows})
+
+        mean_gap_str = f"{mean_gap:+.2f}" if mean_gap is not None else "N/A"
+        med_gap_str = f"{median_gap:+.2f}" if median_gap is not None else "N/A"
+        print(f"  {author:<13}  {mean_gap_str:>11}  {med_gap_str:>12} {feasible_pct:>9.1f}%   {mean_time:>12.2f} {n_inst:>5}")
+
+
+def _save_results_csv(all_runs: list[list[_InstanceResult]], output_file: str) -> None:
+    """Save aggregated benchmark results to CSV file for easy table population."""
+    if not all_runs:
+        return
+
+    by_instance: dict[str, list[_InstanceResult]] = defaultdict(list)
+    for run_results in all_runs:
+        for r in run_results:
+            by_instance[r.name].append(r)
+
+    with open(output_file, "w") as f:
+        # Header
+        f.write("Instance,Author,BKS,Best,Mean,Gap(%),Feasible(%),Time(s),Customers,Depots\n")
+
+        # Data rows
+        for name in sorted(by_instance):
+            rows = by_instance[name]
+            gaps = [r.gap for r in rows if r.gap is not None]
+
+            best_cost = min(r.cost for r in rows)
+            mean_cost = sum(r.cost for r in rows) / len(rows)
+            mean_gap = sum(gaps) / len(gaps) if gaps else None
+
+            feasible_count = sum(1 for r in rows if r.feasible)
+            feasible_pct = 100.0 * feasible_count / len(rows)
+
+            avg_time = sum(r.elapsed for r in rows) / len(rows)
+
+            bks_str = f"{rows[0].ref:.2f}" if rows[0].ref is not None else "N/A"
+            mean_gap_val = f"{mean_gap:.2f}" if mean_gap is not None else "N/A"
+            author = _author_from_instance(name)
+
+            n_customers = rows[0].n_customers
+            n_depots = rows[0].n_depots
+
+            f.write(
+                f"{name},{author},{bks_str},{best_cost:.2f},{mean_cost:.2f},{mean_gap_val},{feasible_pct:.1f},{avg_time:.2f},{n_customers},{n_depots}\n"
+            )
+
+    print(f"\n  Results saved to: {output_file}")
+
+
+def _save_author_summary_csv(all_runs: list[list[_InstanceResult]], output_file: str) -> None:
+    """Save author-level aggregate metrics for direct use in the summary table."""
+    if not all_runs:
+        return
+
+    by_instance: dict[str, list[_InstanceResult]] = defaultdict(list)
+    for run_results in all_runs:
+        for r in run_results:
+            by_instance[r.name].append(r)
+
+    by_author: dict[str, list[_InstanceResult]] = defaultdict(list)
+    for rows in by_instance.values():
+        author = _author_from_instance(rows[0].name)
+        by_author[author].extend(rows)
+
+    with open(output_file, "w") as f:
+        f.write("Author,GapMean(%),GapMedian(%),FeasibleMean(%),TimeMean(s),NumInstances\n")
+        for author in sorted(by_author, key=_author_sort_key):
+            rows = by_author[author]
+            gaps = [r.gap for r in rows if r.gap is not None]
+            mean_gap = sum(gaps) / len(gaps) if gaps else None
+            median_gap = median(gaps) if gaps else None
+            feasible_pct = 100.0 * sum(1 for r in rows if r.feasible) / len(rows)
+            mean_time = sum(r.elapsed for r in rows) / len(rows)
+            n_inst = len({r.name for r in rows})
+
+            mean_gap_val = f"{mean_gap:.2f}" if mean_gap is not None else "N/A"
+            median_gap_val = f"{median_gap:.2f}" if median_gap is not None else "N/A"
+            f.write(f"{author},{mean_gap_val},{median_gap_val},{feasible_pct:.1f},{mean_time:.2f},{n_inst}\n")
+
+        all_rows = [r for rows in by_author.values() for r in rows]
+        all_gaps = [r.gap for r in all_rows if r.gap is not None]
+        all_mean_gap = sum(all_gaps) / len(all_gaps) if all_gaps else None
+        all_median_gap = median(all_gaps) if all_gaps else None
+        all_feasible_pct = 100.0 * sum(1 for r in all_rows if r.feasible) / len(all_rows)
+        all_mean_time = sum(r.elapsed for r in all_rows) / len(all_rows)
+        all_n_inst = len({r.name for r in all_rows})
+
+        all_mean_gap_val = f"{all_mean_gap:.2f}" if all_mean_gap is not None else "N/A"
+        all_median_gap_val = f"{all_median_gap:.2f}" if all_median_gap is not None else "N/A"
+        f.write(
+            f"Global,{all_mean_gap_val},{all_median_gap_val},{all_feasible_pct:.1f},{all_mean_time:.2f},{all_n_inst}\n"
+        )
+
+    print(f"  Author summary saved to: {output_file}")
 
 
 def main() -> None:
@@ -205,6 +355,18 @@ def main() -> None:
         type=int,
         default=1,
         help="Run benchmark N times with random seeds (default: 1).",
+    )
+    parser.add_argument(
+        "--output-csv",
+        type=str,
+        metavar="FILE",
+        help="Save aggregated results to CSV file.",
+    )
+    parser.add_argument(
+        "--output-author-csv",
+        type=str,
+        metavar="FILE",
+        help="Save author-level summary metrics to CSV file.",
     )
     args = parser.parse_args()
 
@@ -242,6 +404,10 @@ def main() -> None:
         all_runs.append(run_results)
 
     _print_multi_run_summary(all_runs)
+    if args.output_csv:
+        _save_results_csv(all_runs, args.output_csv)
+    if args.output_author_csv:
+        _save_author_summary_csv(all_runs, args.output_author_csv)
 
 
 if __name__ == "__main__":
