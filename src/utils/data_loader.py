@@ -242,6 +242,54 @@ def read_cordeau_solution_file(
 
     return CordeauSolution(objective=objective, routes=routes)
 
+
+def read_json_solution_file(path: str) -> CordeauSolution:
+    """
+    Read a solution from the JSON format produced by the GA/CCBC algorithms.
+
+    Expected structure::
+
+        {
+          "metadata": {...},
+          "summary":  {"total_distance": float, ...},
+          "routes": [
+            {
+              "route_id": int,
+              "depot_index": int,
+              "customer_indices": [int, ...],
+              "total_demand": float,
+              "total_duration": float,
+              ...
+            },
+            ...
+          ]
+        }
+    """
+    p = Path(path)
+    if not p.exists():
+        raise FileNotFoundError(f"Solution file not found: {path}")
+
+    with p.open("r", encoding="utf-8") as f:
+        data = json.load(f)
+
+    raw_routes = data.get("routes", [])
+    objective = data.get("summary", {}).get("total_distance", 0.0)
+
+    routes: List[ParsedRoute] = []
+    for r in raw_routes:
+        routes.append(
+            ParsedRoute(
+                depot=r["depot_index"],
+                vehicle=r["route_id"],
+                duration=float(r.get("total_duration", r.get("total_distance", 0.0))),
+                load=float(r.get("total_demand", 0.0)),
+                nodes=list(r["customer_indices"]),
+            )
+        )
+
+    return CordeauSolution(objective=objective, routes=routes)
+
+
 def read_failures_file(path: str) -> List[FailureEvent]:
     """
     Read failure events from JSON.

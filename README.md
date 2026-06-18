@@ -140,23 +140,49 @@ python3 .\src\tools\animate_simulation_log.py --log-file .\data\processed\simula
 ## Geração de falhas em JSON
 
 O script [src/scenario/generate_failures.py](src/scenario/generate_failures.py)
-gera cenários aleatórios de bloqueio de aresta no formato JSON.
+gera cenários de bloqueio de aresta no formato JSON.  Dois modos estão
+disponíveis:
 
-### Exemplo
+| Modo | Quando usar | Como activar |
+|------|-------------|--------------|
+| **Aleatório uniforme** (padrão) | Exploração inicial; sem solução estática disponível | omitir `--routes-file` |
+| **Collapse Zones** (espacial) | Simulações realistas; evita Viés de Evasão | passar `--routes-file` |
+
+### Modo Aleatório Uniforme
 
 ```sh
 python3 src/scenario/generate_failures.py \
   --instance p01 \
   --seed 42 \
   --severity medium \
-  --events 3 \
+  --dod 0.10 \
   --max-time 120.0
 ```
 
-Saída padrão:
+### Modo Collapse Zones
+
+```sh
+python3 src/scenario/generate_failures.py \
+  --instance p01 \
+  --seed 42 \
+  --severity medium \
+  --dod 0.20 \
+  --edod 0.3 \
+  --max-time 120.0 \
+  --routes-file data/processed/solutions/p01.txt
+```
+
+Neste modo, apenas as arestas que a frota efectivamente percorre são
+candidatas a falha.  Cada evento de colapso é centrado num nó epicentro
+aleatório; todas as arestas activas cujas extremidades estejam dentro do
+raio R (distância Euclidiana) são bloqueadas ao mesmo tempo `t_block`.
+O parâmetro `--edod` controla a distribuição temporal: valores baixos
+concentram as falhas no início da operação; valores altos, no fim.
+
+Saída padrão (ambos os modos):
 
 ```text
-data/processed/failures/p01_seed42.json
+data/processed/failures/p01_seed42_dod20.json
 ```
 
 ### Formato gerado
@@ -167,7 +193,9 @@ data/processed/failures/p01_seed42.json
     "instance": "p01",
     "seed": 42,
     "severity": "medium",
-    "generated_at": "2026-04-12"
+    "dod": 0.2,
+    "edod": 0.3012,
+    "generated_at": "2026-06-17"
   },
   "events": [
     {
@@ -180,15 +208,17 @@ data/processed/failures/p01_seed42.json
 }
 ```
 
+O campo `edod` em metadata é sempre calculado a partir dos tempos reais
+gerados (`mean(trigger_time) / max_time`), independentemente do modo usado.
+
 ### Parâmetros principais
 
 - `--instance`: instância Cordeau usada como base (`p01`, `p23`, etc.).
 - `--seed`: controla reprodutibilidade do sorteio.
-- `--events`: número de eventos de falha gerados.
-- `--max-time`: limite superior para sorteio de `trigger_time`.
+- `--dod`: fracção de arestas que devem falhar (`0.0`–`1.0`).
+- `--edod`: Grau de Dinamismo Esperado (`0.0`–`1.0`); controla a distribuição temporal no modo Collapse Zones (padrão: `0.5`).
+- `--max-time`: limite superior para `trigger_time`.
+- `--routes-file`: ficheiro de solução estática; activa o modo Collapse Zones.
 - `--severity`: rótulo de cenário (`low`, `medium`, `high`) salvo em metadata.
 - `--output`: caminho final do JSON (opcional).
 - `--data-file`: caminho explícito para arquivo de instância (opcional).
-
-Observação: no estado atual, `severity` é metadado de cenário e não altera
-automaticamente o número de eventos ou a distribuição temporal.
