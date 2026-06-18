@@ -10,3 +10,5 @@ venv/
 *.pdf
 .DS_Store
 *json
+archive/
+*.tex
