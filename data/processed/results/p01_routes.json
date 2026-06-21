@@ -1,0 +1,176 @@
+{
+  "metadata": {
+    "instance": "p01",
+    "algorithm": "CCBCGAAlgorithm(ccbc_iter=300, ccbc_starts=5, ga_pop=30, ga_gen=100)",
+    "generated_at": "2026-06-18T10:45:58"
+  },
+  "summary": {
+    "route_count": 11,
+    "total_cost": 611.4344770052209,
+    "routes_feasible": true,
+    "fleet_feasible": true,
+    "feasible": true
+  },
+  "routes": [
+    {
+      "route_id": 1,
+      "depot_index": 51,
+      "customer_indices": [
+        44,
+        45,
+        15,
+        37,
+        17,
+        47
+      ],
+      "total_demand": 73.0,
+      "total_distance": 62.71384048279897,
+      "total_duration": 62.71384048279897,
+      "feasible": true
+    },
+    {
+      "route_id": 2,
+      "depot_index": 51,
+      "customer_indices": [
+        13,
+        41,
+        40,
+        19,
+        42
+      ],
+      "total_demand": 79.0,
+      "total_distance": 66.55244058566615,
+      "total_duration": 66.55244058566615,
+      "feasible": true
+    },
+    {
+      "route_id": 3,
+      "depot_index": 51,
+      "customer_indices": [
+        25,
+        18,
+        4
+      ],
+      "total_demand": 78.0,
+      "total_distance": 46.99971630453737,
+      "total_duration": 46.99971630453737,
+      "feasible": true
+    },
+    {
+      "route_id": 4,
+      "depot_index": 52,
+      "customer_indices": [
+        46,
+        12,
+        11,
+        32,
+        27
+      ],
+      "total_demand": 80.0,
+      "total_distance": 46.16914168158533,
+      "total_duration": 46.16914168158533,
+      "feasible": true
+    },
+    {
+      "route_id": 5,
+      "depot_index": 52,
+      "customer_indices": [
+        23,
+        7,
+        43,
+        24,
+        14
+      ],
+      "total_demand": 77.0,
+      "total_distance": 81.39748942203258,
+      "total_duration": 81.39748942203258,
+      "feasible": true
+    },
+    {
+      "route_id": 6,
+      "depot_index": 52,
+      "customer_indices": [
+        1,
+        31,
+        26,
+        8,
+        48,
+        6
+      ],
+      "total_demand": 80.0,
+      "total_distance": 77.7189927797821,
+      "total_duration": 77.7189927797821,
+      "feasible": true
+    },
+    {
+      "route_id": 7,
+      "depot_index": 53,
+      "customer_indices": [
+        30,
+        39,
+        33,
+        10
+      ],
+      "total_demand": 61.0,
+      "total_distance": 55.65241771302593,
+      "total_duration": 55.65241771302593,
+      "feasible": true
+    },
+    {
+      "route_id": 8,
+      "depot_index": 53,
+      "customer_indices": [
+        34,
+        50,
+        16,
+        9
+      ],
+      "total_demand": 62.0,
+      "total_distance": 35.0672840133806,
+      "total_duration": 35.0672840133806,
+      "feasible": true
+    },
+    {
+      "route_id": 9,
+      "depot_index": 53,
+      "customer_indices": [
+        38,
+        5,
+        49
+      ],
+      "total_demand": 54.0,
+      "total_distance": 25.216773999712462,
+      "total_duration": 25.216773999712462,
+      "feasible": true
+    },
+    {
+      "route_id": 10,
+      "depot_index": 54,
+      "customer_indices": [
+        3,
+        28,
+        22,
+        2,
+        21
+      ],
+      "total_demand": 76.0,
+      "total_distance": 69.3024042224265,
+      "total_duration": 69.3024042224265,
+      "feasible": true
+    },
+    {
+      "route_id": 11,
+      "depot_index": 54,
+      "customer_indices": [
+        29,
+        20,
+        36,
+        35
+      ],
+      "total_demand": 57.0,
+      "total_distance": 44.64397580027287,
+      "total_duration": 44.64397580027287,
+      "feasible": true
+    }
+  ]
+}

@@ -1,0 +1,85 @@
+{
+  "metadata": {
+    "instance": "pr01",
+    "algorithm": "CCBCGAAlgorithm(ccbc_iter=300, ccbc_starts=5, ga_pop=30, ga_gen=100)",
+    "generated_at": "2026-06-11T23:22:21"
+  },
+  "summary": {
+    "cluster_count": 4,
+    "customer_count": 48
+  },
+  "clusters": [
+    {
+      "depot_index": 49,
+      "customer_indices": [
+        7,
+        9,
+        31,
+        32,
+        35,
+        36,
+        37,
+        41,
+        44,
+        19
+      ],
+      "customer_count": 10
+    },
+    {
+      "depot_index": 50,
+      "customer_indices": [
+        3,
+        6,
+        10,
+        11,
+        22,
+        27,
+        34,
+        42,
+        45,
+        46,
+        48
+      ],
+      "customer_count": 11
+    },
+    {
+      "depot_index": 51,
+      "customer_indices": [
+        1,
+        4,
+        5,
+        8,
+        13,
+        14,
+        16,
+        17,
+        18,
+        20,
+        26,
+        28,
+        29,
+        33
+      ],
+      "customer_count": 14
+    },
+    {
+      "depot_index": 52,
+      "customer_indices": [
+        2,
+        12,
+        15,
+        21,
+        23,
+        24,
+        25,
+        30,
+        38,
+        39,
+        40,
+        43,
+        47
+      ],
+      "customer_count": 13
+    }
+  ]
+}

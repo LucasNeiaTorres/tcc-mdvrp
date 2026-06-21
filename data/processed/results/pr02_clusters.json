@@ -1,0 +1,133 @@
+{
+  "metadata": {
+    "instance": "pr02",
+    "algorithm": "CCBCGAAlgorithm(ccbc_iter=300, ccbc_starts=5, ga_pop=30, ga_gen=100)",
+    "generated_at": "2026-06-21T17:49:08"
+  },
+  "summary": {
+    "cluster_count": 4,
+    "customer_count": 96
+  },
+  "clusters": [
+    {
+      "depot_index": 97,
+      "customer_indices": [
+        8,
+        13,
+        16,
+        17,
+        19,
+        20,
+        27,
+        37,
+        38,
+        44,
+        55,
+        62,
+        64,
+        68,
+        69,
+        73,
+        74,
+        81,
+        84,
+        86,
+        92,
+        93,
+        9,
+        25,
+        39,
+        60,
+        72,
+        59
+      ],
+      "customer_count": 28
+    },
+    {
+      "depot_index": 98,
+      "customer_indices": [
+        5,
+        7,
+        29,
+        32,
+        47,
+        57,
+        58,
+        65,
+        87,
+        94,
+        95,
+        78,
+        33,
+        88,
+        1
+      ],
+      "customer_count": 15
+    },
+    {
+      "depot_index": 99,
+      "customer_indices": [
+        2,
+        3,
+        6,
+        10,
+        12,
+        14,
+        18,
+        22,
+        24,
+        36,
+        42,
+        48,
+        50,
+        51,
+        53,
+        56,
+        66,
+        67,
+        71,
+        76,
+        80,
+        85,
+        96
+      ],
+      "customer_count": 23
+    },
+    {
+      "depot_index": 100,
+      "customer_indices": [
+        4,
+        11,
+        15,
+        21,
+        23,
+        26,
+        28,
+        30,
+        31,
+        34,
+        35,
+        40,
+        41,
+        43,
+        45,
+        46,
+        49,
+        52,
+        54,
+        61,
+        63,
+        70,
+        75,
+        77,
+        79,
+        82,
+        83,
+        89,
+        90,
+        91
+      ],
+      "customer_count": 30
+    }
+  ]
+}
