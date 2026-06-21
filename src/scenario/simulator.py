@@ -928,6 +928,7 @@ def _commit_stage2_updates(
     broken_edge: tuple[int, int],
     wasted_travel_time: float,
     wasted_travel_distance: float,
+    save_reroute_files: bool = True,
 ) -> None:
     affected_data = new_routes_by_id.get(affected_route_id)
     if affected_data is None:
@@ -977,17 +978,18 @@ def _commit_stage2_updates(
         f"data/processed/results/{instance_name}_reroute_{reroute_index:03d}_"
         f"t{time_tag:06d}.json"
     )
-    save_reroute_result(
-        output_path=output_path,
-        instance_name=instance_name,
-        algorithm_name=f"{algorithm} (reroute {reroute_index})",
-        solution=current_solution,
-        vehicles=reroute_vehicles_payload,
-        current_time_minutes=current_time,
-        broken_edge=broken_edge,
-        reroute_index=reroute_index,
-    )
-    print(f"Saved reroute result to {output_path}")
+    if save_reroute_files:
+        save_reroute_result(
+            output_path=output_path,
+            instance_name=instance_name,
+            algorithm_name=f"{algorithm} (reroute {reroute_index})",
+            solution=current_solution,
+            vehicles=reroute_vehicles_payload,
+            current_time_minutes=current_time,
+            broken_edge=broken_edge,
+            reroute_index=reroute_index,
+        )
+        print(f"Saved reroute result to {output_path}")
 
     for route_id, data in new_routes_by_id.items():
         item = data["item"]
@@ -1032,6 +1034,7 @@ def _commit_stage3_updates(
     affected_route_id: int,
     cascade_hero_route_ids: list[int] | None = None,
     wasted_to_node: int | None = None,
+    save_reroute_files: bool = True,
 ) -> None:
     blocked_state = vehicle_states[affected_route_id]
     affected_executed_count = max(0, blocked_state.next_stop_index - 1)
@@ -1180,17 +1183,18 @@ def _commit_stage3_updates(
         f"data/processed/results/{instance_name}_reroute_{reroute_index:03d}_"
         f"t{time_tag:06d}.json"
     )
-    save_reroute_result(
-        output_path=output_path,
-        instance_name=instance_name,
-        algorithm_name=f"{algorithm} (reroute {reroute_index})",
-        solution=current_solution,
-        vehicles=reroute_vehicles_payload,
-        current_time_minutes=current_time,
-        broken_edge=broken_edge,
-        reroute_index=reroute_index,
-    )
-    print(f"Saved reroute result to {output_path}")
+    if save_reroute_files:
+        save_reroute_result(
+            output_path=output_path,
+            instance_name=instance_name,
+            algorithm_name=f"{algorithm} (reroute {reroute_index})",
+            solution=current_solution,
+            vehicles=reroute_vehicles_payload,
+            current_time_minutes=current_time,
+            broken_edge=broken_edge,
+            reroute_index=reroute_index,
+        )
+        print(f"Saved reroute result to {output_path}")
 
     event_queue.remove_future_events_for_route(affected_route_id, current_time)
     schedule_rerouted_events(
@@ -1253,6 +1257,7 @@ def run_simulation(
     algorithm: MDVRPAlgorithm,
     cfg: AppConfig,
     enabled_stages: frozenset[int] = frozenset({1, 2, 3}),
+    save_reroute_files: bool = True,
 ):
     """
     Run event-driven simulation with dynamic rerouting on edge failures.
@@ -1303,6 +1308,7 @@ def run_simulation(
     reroute_by_stage = {"stage1": 0, "stage2": 0, "stage3": 0}
     reroute_time_total = 0.0
     reroute_time_by_stage: dict[str, float] = {"stage1": 0.0, "stage2": 0.0, "stage3": 0.0}
+    n_disasters_triggered = 0  # edge_blocks that actually intercepted a vehicle
     history_log = []
     total_wasted_distance = 0.0
     current_time = 0.0
@@ -1333,6 +1339,7 @@ def run_simulation(
 
         elif event.type == "edge_block":
             blocked_edges.add(_normalize_edge(event.payload["node_a"], event.payload["node_b"]))
+            _prev_unserved_snapshot = len(forced_unserved_customer_ids)
             _t0_reroute = time.perf_counter()
             reroute_inc, wasted, accepted_stage = _handle_disaster(
                 event,
@@ -1351,8 +1358,12 @@ def run_simulation(
                 unserved_no_route_without_broken_edge_ids,
                 unserved_mixed_reason_ids,
                 enabled_stages=enabled_stages,
+                save_reroute_files=save_reroute_files,
             )
             _elapsed_reroute = time.perf_counter() - _t0_reroute
+            _prev_unserved_size_after = len(forced_unserved_customer_ids)
+            if reroute_inc > 0 or _prev_unserved_size_after > _prev_unserved_snapshot:
+                n_disasters_triggered += 1
             reroute_time_total += _elapsed_reroute
             reroute_count += reroute_inc
             if reroute_inc > 0 and accepted_stage in reroute_by_stage:
@@ -1697,6 +1708,19 @@ def run_simulation(
                 "stage2": reroute_by_stage["stage2"],
                 "stage3": reroute_by_stage["stage3"],
             },
+            "reroute_time_total_s": round(reroute_time_total, 6),
+            "reroute_time_by_stage_s": {
+                "stage1": round(reroute_time_by_stage["stage1"], 6),
+                "stage2": round(reroute_time_by_stage["stage2"], 6),
+                "stage3": round(reroute_time_by_stage["stage3"], 6),
+            },
+            "reroute_avg_time_by_stage_s": {
+                "stage1": round(reroute_time_by_stage["stage1"] / reroute_by_stage["stage1"], 6) if reroute_by_stage["stage1"] > 0 else 0.0,
+                "stage2": round(reroute_time_by_stage["stage2"] / reroute_by_stage["stage2"], 6) if reroute_by_stage["stage2"] > 0 else 0.0,
+                "stage3": round(reroute_time_by_stage["stage3"] / reroute_by_stage["stage3"], 6) if reroute_by_stage["stage3"] > 0 else 0.0,
+            },
+            "reroute_avg_time_total_s": round(reroute_time_total / reroute_count, 6) if reroute_count > 0 else 0.0,
+            "n_disasters_triggered": n_disasters_triggered,
             "total_customers": len(expected_set),
             "unserved_count": len(unserved_customers),
             "unserved_customers": unserved_customers,
@@ -1780,6 +1804,7 @@ def _handle_disaster(
     unserved_no_route_without_broken_edge_ids: set[int],
     unserved_mixed_reason_ids: set[int],
     enabled_stages: frozenset[int] = frozenset({1, 2, 3}),
+    save_reroute_files: bool = True,
 ) -> Tuple[int, float, str | None]:
     """
     Handle edge block event by finding affected vehicle and rerouting.
@@ -1990,6 +2015,7 @@ def _handle_disaster(
                 broken_edge=broken_edge,
                 wasted_travel_time=wasted_travel_time,
                 wasted_travel_distance=wasted_travel_distance,
+                save_reroute_files=save_reroute_files,
             )
             return 1, wasted_travel_distance, "stage2"
 
@@ -2245,6 +2271,7 @@ def _handle_disaster(
 
                 _commit_stage3_updates(
                     winner_state=vehicle_states[rescued_state.route_id],
+                    save_reroute_files=save_reroute_files,
                     target_node=target_node,
                     donor_repaired_customers=stabilized_future_customers,
                     vehicle_states=vehicle_states,
@@ -2360,17 +2387,18 @@ def _handle_disaster(
         f"data/processed/results/{instance_name}_reroute_{reroute_index:03d}_"
         f"t{time_tag:06d}.json"
     )
-    save_reroute_result(
-        output_path=output_path,
-        instance_name=instance_name,
-        algorithm_name=f"{algorithm} (reroute {reroute_index})",
-        solution=current_solution,
-        vehicles=reroute_vehicles_payload,
-        current_time_minutes=current_time,
-        broken_edge=broken_edge,
-        reroute_index=reroute_index,
-    )
-    print(f"Saved reroute result to {output_path}")
+    if save_reroute_files:
+        save_reroute_result(
+            output_path=output_path,
+            instance_name=instance_name,
+            algorithm_name=f"{algorithm} (reroute {reroute_index})",
+            solution=current_solution,
+            vehicles=reroute_vehicles_payload,
+            current_time_minutes=current_time,
+            broken_edge=broken_edge,
+            reroute_index=reroute_index,
+        )
+        print(f"Saved reroute result to {output_path}")
 
     # Remove old future events for this route and inject new ones based on reroute.
     event_queue.remove_future_events_for_route(affected_route, current_time)
