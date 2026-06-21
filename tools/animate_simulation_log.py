@@ -190,9 +190,59 @@ def _event_payload(event: dict[str, Any]) -> dict[str, Any]:
     return {k: v for k, v in event.items() if k not in ignore}
 
 
-def load_reroute_snapshots(results_dir: Path, instance_name: str) -> list[RerouteSnapshot]:
-    """Load all reroute result files for the given instance, sorted by time."""
+def log_blocked_edges_by_time(events: list[TimedEvent]) -> list[tuple[float, frozenset[int]]]:
+    """Extract (time, {node_a, node_b}) for every edge_block event in the log.
+
+    This is the provenance fingerprint used to decide which reroute snapshot
+    files actually belong to the current simulation log.
+    """
+    blocks: list[tuple[float, frozenset[int]]] = []
+    for event in events:
+        if event.event_type != "edge_block":
+            continue
+        node_a = _as_int(event.payload.get("node_a"))
+        node_b = _as_int(event.payload.get("node_b"))
+        if node_a is None or node_b is None:
+            continue
+        blocks.append((event.time_minutes, frozenset({node_a, node_b})))
+    return blocks
+
+
+def _snapshot_belongs_to_log(
+    snapshot_time: float,
+    broken_edge: frozenset[int],
+    log_blocks: list[tuple[float, frozenset[int]]],
+    time_tol: float = 1e-3,
+) -> bool:
+    """True iff a reroute snapshot was triggered by an edge_block in THIS log.
+
+    A genuine reroute happens at the exact time one of this log's edges breaks,
+    and is triggered by that same edge.  The shared ``results/`` directory
+    accumulates snapshot files from unrelated past runs (different scenarios,
+    different times, different broken edges); requiring BOTH the time AND the
+    broken edge to match a real log block reliably rejects those orphans.
+    """
+    if not broken_edge:
+        return False
+    for block_time, block_edge in log_blocks:
+        if abs(block_time - snapshot_time) <= time_tol and block_edge == broken_edge:
+            return True
+    return False
+
+
+def load_reroute_snapshots(
+    results_dir: Path,
+    instance_name: str,
+    log_blocks: list[tuple[float, frozenset[int]]] | None = None,
+) -> list[RerouteSnapshot]:
+    """Load reroute result files that belong to the current log, sorted by time.
+
+    When *log_blocks* is provided, only snapshots whose (time, broken_edge) match
+    an edge_block in the current log are loaded.  This filters out orphan files
+    from previous simulation runs that share the same ``results/`` directory.
+    """
     snapshots: list[RerouteSnapshot] = []
+    skipped_orphans = 0
     for path in sorted(results_dir.glob(f"{instance_name}_reroute_*.json")):
         with path.open("r", encoding="utf-8") as handle:
             raw = json.load(handle)
@@ -203,6 +253,16 @@ def load_reroute_snapshots(results_dir: Path, instance_name: str) -> list[Rerout
         )
         if time_minutes is None:
             continue
+
+        # Provenance gate: reject snapshots that do not correspond to a real
+        # edge_block in this log (i.e. leftovers from other runs).
+        if log_blocks is not None:
+            be_raw = raw.get("metadata", {}).get("broken_edge", []) or []
+            be = frozenset(n for n in (_as_int(x) for x in be_raw) if n is not None)
+            if not _snapshot_belongs_to_log(time_minutes, be, log_blocks):
+                skipped_orphans += 1
+                continue
+
         routes_data = raw.get("routes", [])
         if not isinstance(routes_data, list):
             continue
@@ -270,6 +330,11 @@ def load_reroute_snapshots(results_dir: Path, instance_name: str) -> list[Rerout
             u_turns=tuple(u_turns_list),
         ))
     snapshots.sort(key=lambda s: s.time_minutes)
+    if log_blocks is not None and skipped_orphans:
+        print(
+            f"[reroute snapshots] {len(snapshots)} matched this log; "
+            f"{skipped_orphans} orphan file(s) from other runs ignored."
+        )
     return snapshots
 
 
@@ -313,7 +378,6 @@ def _inject_u_turn_segments(
         synthetic_id -= 1
         positions[mid_node] = mid_pos
 
-        departure_t = u.edge_break_t - u.elapsed
         return_t = u.edge_break_t + u.elapsed
         new_timeline: list[Segment] = []
         inserted = False
@@ -322,11 +386,15 @@ def _inject_u_turn_segments(
                 not inserted
                 and seg.kind == "travel"
                 and seg.from_node == u.from_node
-                and seg.to_node == u.to_node
-                and seg.start <= departure_t + 0.5
-                and seg.start >= departure_t - 0.5
+                and seg.start <= u.edge_break_t + EPS
                 and seg.end >= u.edge_break_t - EPS
             ):
+                # Use the segment's actual start as departure to avoid timeline gaps.
+                # The original matching on seg.to_node == u.to_node fails after a
+                # reroute because the timeline now has from_node → rerouted_dest
+                # instead of from_node → blocked_dest.  Matching on timing alone
+                # (segment active at edge_break_t) is both correct and reroute-safe.
+                departure_t = seg.start
                 # 1. Outbound: travel to the actual on-edge position at normal speed
                 new_timeline.append(Segment(
                     kind="travel",
@@ -452,13 +520,18 @@ def enrich_plans_from_events(
         for rid, plan in existing.items()
     }
 
-    # Customers already assigned in the loaded plans must not be re-added from
-    # arrival events, which may reflect post-reroute assignments and would cause
-    # the same customer to appear in two routes at time zero.
-    already_assigned: set[int] = {
-        customer
-        for plan in plans.values()
-        for customer in plan.customers
+    # customer_owner maps each customer to the route that currently "owns" it.
+    # Arrival events are the ground truth: when a customer arrives at a different
+    # route than its initial owner (rerouting), it is moved to the new route so
+    # that the original route never shows it as a ghost "remaining" stop.
+    customer_owner: dict[int, int] = {}
+    for rid, plan in plans.items():
+        for customer in plan.customers:
+            customer_owner[customer] = rid
+
+    per_route_seen: dict[int, set[int]] = {
+        rid: set(plan.customers)
+        for rid, plan in plans.items()
     }
 
     for event in events:
@@ -473,15 +546,28 @@ def enrich_plans_from_events(
 
         if route_id not in plans:
             plans[route_id] = RoutePlan(route_id=route_id, depot_index=depot_index, customers=[])
+            per_route_seen[route_id] = set()
 
         plan = plans[route_id]
         plan.depot_index = depot_index
 
         if node_index is None or node_index == depot_index:
             continue
-        if node_index not in already_assigned:
+
+        prev_owner = customer_owner.get(node_index)
+        if prev_owner is not None and prev_owner != route_id:
+            # Customer arrived at a different route — move it out of the old
+            # owner's plan (reroute case).  This is the ground-truth correction
+            # that prevents ghost "remaining" dotted lines after completion.
+            prev_plan = plans.get(prev_owner)
+            if prev_plan is not None:
+                prev_plan.customers = [c for c in prev_plan.customers if c != node_index]
+                per_route_seen[prev_owner].discard(node_index)
+
+        if node_index not in per_route_seen[route_id]:
             plan.customers.append(node_index)
-            already_assigned.add(node_index)
+            per_route_seen[route_id].add(node_index)
+        customer_owner[node_index] = route_id
 
     return plans
 
@@ -662,6 +748,7 @@ def resolve_paths(
     metadata: dict[str, Any],
     instance_file: Path | None,
     routes_file: Path | None,
+    events: list[TimedEvent] | None = None,
 ) -> tuple[str, Path, Path | None, list[RerouteSnapshot]]:
     instance_name = str(metadata.get("instance") or "").strip()
     if not instance_name:
@@ -682,7 +769,8 @@ def resolve_paths(
             routes_file = candidate
 
     results_dir = REPO_ROOT / "data" / "processed" / "results"
-    reroute_snapshots = load_reroute_snapshots(results_dir, instance_name)
+    log_blocks = log_blocked_edges_by_time(events) if events is not None else None
+    reroute_snapshots = load_reroute_snapshots(results_dir, instance_name, log_blocks)
 
     return instance_name, instance_file, routes_file, reroute_snapshots
 
@@ -1075,11 +1163,24 @@ class Visualizer:
             if depot_index in self.positions and runtime.plan.depot_index != depot_index:
                 runtime.plan.depot_index = depot_index
                 plan_changed = True
+            # Exclude customers already visited by OTHER routes: once another
+            # route claimed a customer via an arrival event, no snapshot should
+            # re-introduce it into this route's plan.
+            visited_elsewhere: set[int] = set()
+            for rid, rt in self.route_runtimes.items():
+                if rid != route_id:
+                    visited_elsewhere.update(rt.visited_set)
             sanitized = [
                 c for c in customers
                 if c in self.positions and c != depot_index
+                and c not in visited_elsewhere
             ]
-            if runtime.plan.customers != sanitized:
+            # Use SET comparison (not list) so that snapshots which encode the
+            # same future customers in a different order do not trigger a plan
+            # update and the associated dotted-line flicker.
+            future_snapshot = {c for c in sanitized if c not in runtime.visited_set}
+            future_current = {c for c in runtime.plan.customers if c not in runtime.visited_set}
+            if future_snapshot != future_current:
                 runtime.plan.customers = sanitized
                 plan_changed = True
             if plan_changed:
@@ -1241,6 +1342,13 @@ class Visualizer:
         done_points.append((pose.x, pose.y))
         done_compact = self._compact(done_points)
 
+        def to_xy(pts: list[tuple[float, float]]) -> tuple[list[float], list[float]]:
+            if len(pts) < 2:
+                return [], []
+            return [p[0] for p in pts], [p[1] for p in pts]
+
+        done_xs, done_ys = to_xy(done_compact)
+
         # Planned (dotted): current node → remaining unvisited customers → depot.
         # plan.customers is updated by _apply_reroute_snapshot at the exact
         # reroute time, so this always reflects the correct current plan.
@@ -1253,12 +1361,6 @@ class Visualizer:
             plan_points.append(depot_pos)
         plan_compact = self._compact(plan_points)
 
-        def to_xy(pts: list[tuple[float, float]]) -> tuple[list[float], list[float]]:
-            if len(pts) < 2:
-                return [], []
-            return [p[0] for p in pts], [p[1] for p in pts]
-
-        done_xs, done_ys = to_xy(done_compact)
         plan_xs, plan_ys = to_xy(plan_compact)
         return done_xs, done_ys, plan_xs, plan_ys
 
@@ -1478,6 +1580,7 @@ def main() -> int:
         metadata=metadata,
         instance_file=args.instance_file.resolve() if args.instance_file is not None else None,
         routes_file=args.routes_file.resolve() if args.routes_file is not None else None,
+        events=events,
     )
 
     visualizer = Visualizer.from_files(
