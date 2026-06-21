@@ -1,5 +1,6 @@
 """Main simulation engine for dynamic vehicle routing with failures."""
 
+import time
 from copy import deepcopy
 from dataclasses import dataclass
 
@@ -1251,6 +1252,7 @@ def run_simulation(
     instance_name: str,
     algorithm: MDVRPAlgorithm,
     cfg: AppConfig,
+    enabled_stages: frozenset[int] = frozenset({1, 2, 3}),
 ):
     """
     Run event-driven simulation with dynamic rerouting on edge failures.
@@ -1299,6 +1301,8 @@ def run_simulation(
     vehicle_states = _build_vehicle_states(current_solution)
     reroute_count = 0
     reroute_by_stage = {"stage1": 0, "stage2": 0, "stage3": 0}
+    reroute_time_total = 0.0
+    reroute_time_by_stage: dict[str, float] = {"stage1": 0.0, "stage2": 0.0, "stage3": 0.0}
     history_log = []
     total_wasted_distance = 0.0
     current_time = 0.0
@@ -1329,6 +1333,7 @@ def run_simulation(
 
         elif event.type == "edge_block":
             blocked_edges.add(_normalize_edge(event.payload["node_a"], event.payload["node_b"]))
+            _t0_reroute = time.perf_counter()
             reroute_inc, wasted, accepted_stage = _handle_disaster(
                 event,
                 current_time,
@@ -1345,10 +1350,15 @@ def run_simulation(
                 unserved_no_active_route_ids,
                 unserved_no_route_without_broken_edge_ids,
                 unserved_mixed_reason_ids,
+                enabled_stages=enabled_stages,
             )
+            _elapsed_reroute = time.perf_counter() - _t0_reroute
+            reroute_time_total += _elapsed_reroute
             reroute_count += reroute_inc
             if reroute_inc > 0 and accepted_stage in reroute_by_stage:
                 reroute_by_stage[accepted_stage] += reroute_inc
+            if accepted_stage in reroute_time_by_stage:
+                reroute_time_by_stage[accepted_stage] += _elapsed_reroute
             total_wasted_distance += wasted
 
     depot_arrival_times = [
@@ -1550,6 +1560,24 @@ def run_simulation(
         f"S2={reroute_by_stage['stage2']} | "
         f"S3={reroute_by_stage['stage3']}"
     )
+    _avg_total = reroute_time_total / reroute_count if reroute_count > 0 else 0.0
+    _avg_s1 = reroute_time_by_stage["stage1"] / reroute_by_stage["stage1"] if reroute_by_stage["stage1"] > 0 else 0.0
+    _avg_s2 = reroute_time_by_stage["stage2"] / reroute_by_stage["stage2"] if reroute_by_stage["stage2"] > 0 else 0.0
+    _avg_s3 = reroute_time_by_stage["stage3"] / reroute_by_stage["stage3"] if reroute_by_stage["stage3"] > 0 else 0.0
+    print(f"Reroute wall time total : {reroute_time_total:.3f}s")
+    print(
+        "Reroute time by stage   : "
+        f"S1={reroute_time_by_stage['stage1']:.3f}s | "
+        f"S2={reroute_time_by_stage['stage2']:.3f}s | "
+        f"S3={reroute_time_by_stage['stage3']:.3f}s"
+    )
+    print(
+        "Reroute avg time/stage  : "
+        f"S1={_avg_s1:.3f}s | "
+        f"S2={_avg_s2:.3f}s | "
+        f"S3={_avg_s3:.3f}s"
+    )
+    print(f"Reroute avg time total  : {_avg_total:.3f}s/op")
     print(
         f"Total execution time    : {total_execution_time:.2f} min "
         "(last arrival at depot)"
@@ -1751,6 +1779,7 @@ def _handle_disaster(
     unserved_no_active_route_ids: set[int],
     unserved_no_route_without_broken_edge_ids: set[int],
     unserved_mixed_reason_ids: set[int],
+    enabled_stages: frozenset[int] = frozenset({1, 2, 3}),
 ) -> Tuple[int, float, str | None]:
     """
     Handle edge block event by finding affected vehicle and rerouting.
@@ -1855,6 +1884,9 @@ def _handle_disaster(
         reroute_degradation_threshold=reroute_degradation_threshold,
         blocked_edges=blocked_edges,
     )
+    if 1 not in enabled_stages:
+        print("Stage 1 disabled by experiment configuration.")
+        stage1_accepted = False
 
     def _stage1_fallback_is_valid() -> bool:
         is_valid = is_feasible(
@@ -1922,26 +1954,29 @@ def _handle_disaster(
             wasted_distance=historical_wasted_distance,
         )
     else:
-        print("Reverting local patch and attempting Stage 2 intra-cluster reoptimization.")
-
-        stage2_accepted, stage2_fallback = reoptimize_intra_cluster(
-            vehicle_states=vehicle_states,
-            algorithm=algorithm,
-            affected_route_id=affected_route,
-            current_time=current_time,
-            blocked_edges=blocked_edges,
-            local_search_max_iterations=10000,
-            granularity=granularity,
-            cluster_degradation_threshold=cluster_degradation_threshold,
-            event_start_node=event_start_node,
-            reroute_start_time=reroute_start_time,
-            wasted_travel_time=wasted_travel_time,
-            wasted_travel_distance=wasted_travel_distance,
-            fixed_next_customer=fixed_next_customer,
-            travel_to_next=travel_to_next,
-            leg=leg,
-            on_broken_edge=on_broken_edge,
-        )
+        if 2 not in enabled_stages:
+            print("Stage 2 disabled by experiment configuration.")
+            stage2_accepted, stage2_fallback = None, None
+        else:
+            print("Reverting local patch and attempting Stage 2 intra-cluster reoptimization.")
+            stage2_accepted, stage2_fallback = reoptimize_intra_cluster(
+                vehicle_states=vehicle_states,
+                algorithm=algorithm,
+                affected_route_id=affected_route,
+                current_time=current_time,
+                blocked_edges=blocked_edges,
+                local_search_max_iterations=10000,
+                granularity=granularity,
+                cluster_degradation_threshold=cluster_degradation_threshold,
+                event_start_node=event_start_node,
+                reroute_start_time=reroute_start_time,
+                wasted_travel_time=wasted_travel_time,
+                wasted_travel_distance=wasted_travel_distance,
+                fixed_next_customer=fixed_next_customer,
+                travel_to_next=travel_to_next,
+                leg=leg,
+                on_broken_edge=on_broken_edge,
+            )
         if stage2_accepted is not None:
             _commit_stage2_updates(
                 new_routes_by_id=stage2_accepted,
@@ -1957,6 +1992,16 @@ def _handle_disaster(
                 wasted_travel_distance=wasted_travel_distance,
             )
             return 1, wasted_travel_distance, "stage2"
+
+        if 3 not in enabled_stages:
+            print("Stage 3 disabled by experiment configuration; marking pending customers as unserved.")
+            unserved_ids = [
+                *([fixed_next_customer.index] if fixed_next_customer is not None else []),
+                *[c.index for c in pending_customers],
+            ]
+            for uid in unserved_ids:
+                forced_unserved_customer_ids.add(uid)
+            return 0, wasted_travel_distance, None
 
         print("Stage 2 rejected; proceeding to Stage 3 global cross-depot repair.")
 

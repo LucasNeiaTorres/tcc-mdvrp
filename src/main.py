@@ -42,6 +42,15 @@ def main() -> int:
         default=False,
         help="Skip the simulation phase (default: run simulation if a failures file is found).",
     )
+    parser.add_argument(
+        "--stages",
+        nargs="+",
+        type=int,
+        choices=[1, 2, 3],
+        default=[1, 2, 3],
+        metavar="N",
+        help="Active contingency stages (1, 2, 3). Default: all three.",
+    )
     args = parser.parse_args()
 
     loaded = load_instance(args.instance)
@@ -177,6 +186,7 @@ def main() -> int:
             instance_name=data_file.name,
             algorithm=algorithm,
             cfg=cfg,
+            enabled_stages=frozenset(args.stages),
             # output_dir=base_dir / "data" / "processed" / "simulations" / data_file.name,
         )
 
