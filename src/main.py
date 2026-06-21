@@ -167,15 +167,15 @@ def main() -> int:
             instance,
             [reference_solution, solution],
             titles=[
-                f"Reference (obj: {reference_solution.objective:.2f})",
-                f"CCBC+GA (cost: {solution.total_cost():.2f})",
+                f"BKS (custo: {reference_solution.objective:.2f})",
+                f"CCBC+GA (custo: {solution.total_cost():.2f})",
             ],
         )
     else:
         visualize_solution(
             instance,
             solution,
-            title=f"CCBC+GA solution (cost: {solution.total_cost():.2f})",
+            title=f"Solução CCBC+GA (custo: {solution.total_cost():.2f})",
         )
     
     if failures is not None and not args.no_simulate:
@@ -195,15 +195,15 @@ def main() -> int:
                 instance,
                 [reference_solution, simulated_solution],
                 titles=[
-                    f"Reference (obj: {reference_solution.objective:.2f})",
-                    f"CCBC+GA after simulation (cost: {simulated_solution.total_cost():.2f})",
+                    f"Referência (obj.: {reference_solution.objective:.2f})",
+                    f"CCBC+GA após simulação (custo: {simulated_solution.total_cost():.2f})",
                 ],
             )
         else:
             visualize_solution(
                 instance,
                 simulated_solution,
-                title=f"CCBC+GA after simulation (cost: {simulated_solution.total_cost():.2f})",
+                title=f"CCBC+GA após simulação (custo: {simulated_solution.total_cost():.2f})",
             )
 
         log_path = SIMULATION_LOG_DIR / f"{data_file.name}_log.json"

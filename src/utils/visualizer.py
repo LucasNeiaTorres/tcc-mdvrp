@@ -112,6 +112,9 @@ def visualize_solution(
     solution: VisualizableSolution,
     title: str = "MDVRP Solution",
     show_labels: bool = True,
+    save_path: Optional[str] = "solucao-mdvrp.pdf",
+    show: bool = True,
+    dpi: int = 300,
 ) -> None:
     """Plot a single solution overlaid on the instance."""
     fig, ax = plt.subplots(figsize=(12, 10))
@@ -120,7 +123,14 @@ def visualize_solution(
     ax.legend(loc="upper right", fontsize=9, ncol=2)
     _style_ax(ax, title)
     plt.tight_layout()
-    plt.show(block=False)
+
+    if save_path:
+        fig.savefig(save_path, bbox_inches="tight", pad_inches=0.02, dpi=dpi)
+
+    if show:
+        plt.show(block=False)
+    else:
+        plt.close(fig)
 
 
 def visualize_comparison(
@@ -128,13 +138,16 @@ def visualize_comparison(
     solutions: List[VisualizableSolution],
     titles: Optional[List[str]] = None,
     show_labels: bool = True,
+    save_path: Optional[str] = "comparacao-solucoes.pdf",
+    show: bool = True,
+    dpi: int = 300,
 ) -> None:
-    """Show multiple solutions side-by-side. """
+    """Exibe multiplas solucoes lado a lado e opcionalmente exporta a figura."""
     if not solutions:
         raise ValueError("At least one solution is required.")
 
     if titles is None:
-        titles = [f"Solution {i + 1}" for i in range(len(solutions))]
+        titles = [f"Solução {i + 1}" for i in range(len(solutions))]
 
     n = len(solutions)
     fig, axes = plt.subplots(1, n, figsize=(7 * n, 6))
@@ -144,14 +157,33 @@ def visualize_comparison(
     for ax, solution, title in zip(axes, solutions, titles):
         _draw_routes(ax, instance, solution)
         _draw_nodes(ax, instance, show_labels)
+        handles, labels = ax.get_legend_handles_labels()
+        translated_labels = ["Clientes" if label == "Customers" else "Depósitos" if label == "Depots" else label for label in labels]
+        if handles:
+            ax.legend(handles, translated_labels, loc="upper right", fontsize=9, ncol=2)
         _style_ax(ax, title)
 
     plt.tight_layout()
-    plt.show(block=False)
+
+    if save_path:
+        fig.savefig(save_path, bbox_inches="tight", pad_inches=0.02, dpi=dpi)
+
+    if show:
+        plt.show(block=False)
+    else:
+        plt.close(fig)
 
 
-def visualize_ga_convergence(histories: List[GADepotHistory]) -> None:
-    """Plot GA convergence (best, mean, mean±std) in one subplot per depot."""
+def visualize_ga_convergence(
+    histories: List[GADepotHistory],
+    save_path: Optional[str] = "figura-convergencia-p07.pdf",
+    show: bool = True,
+    dpi: int = 300,
+) -> None:
+    """Plot GA convergence (best, mean, mean±std) in one subplot per depot.
+
+    If save_path is provided, the figure is exported (PDF recommended for LaTeX).
+    """
     active = [h for h in histories if h.best]
     if not active:
         return
@@ -169,20 +201,31 @@ def visualize_ga_convergence(histories: List[GADepotHistory]) -> None:
         mean = np.array(hist.mean)
         std = np.array(hist.std)
 
-        ax.plot(generations, best, color="steelblue", linewidth=2, label="Best")
-        ax.plot(generations, mean, color="darkorange", linewidth=1.5, linestyle="--", label="Mean")
-        ax.fill_between(generations, mean - std, mean + std, color="darkorange", alpha=0.2, label="Mean ± Std")
+        ax.plot(generations, best, color="steelblue", linewidth=2, label="Melhor")
+        ax.plot(generations, mean, color="darkorange", linewidth=1.5, linestyle="--", label="Média")
+        ax.set_yscale("log")
+        ax.fill_between(generations, mean - std, mean + std, color="darkorange", alpha=0.2, label="Média ± Desvio")
 
-        stopped = " — early stop" if hist.stopped_early else ""
-        ax.set_title(f"Depot {hist.depot_index}  (clones removed: {hist.clones_removed}{stopped})", fontsize=11, fontweight="bold")
-        ax.set_xlabel("Generation", fontsize=9)
-        ax.set_ylabel("Cost", fontsize=9)
+        ax.set_title(
+            f"Depósito {hist.depot_index}",
+            fontsize=11,
+            fontweight="bold",
+        )
+        ax.set_xlabel("Geração", fontsize=9)
+        ax.set_ylabel("Custo", fontsize=9)
         ax.legend(fontsize=8)
         ax.grid(True, alpha=0.3)
 
     for idx in range(len(active), nrows * ncols):
         axes[idx // ncols][idx % ncols].set_visible(False)
 
-    fig.suptitle("GA Convergence per Depot", fontsize=13, fontweight="bold")
+    fig.suptitle("Convergência do GA por depósito", fontsize=13, fontweight="bold")
     plt.tight_layout()
-    plt.show(block=False)
+
+    if save_path:
+        fig.savefig(save_path, bbox_inches="tight", pad_inches=0.02, dpi=dpi)
+
+    if show:
+        plt.show(block=False)
+    else:
+        plt.close(fig)
