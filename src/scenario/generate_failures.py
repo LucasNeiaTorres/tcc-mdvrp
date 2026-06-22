@@ -131,6 +131,7 @@ def generate_collapse_zones(
 		List of FailureEvent tuples sorted by trigger_time.
 	"""
 	all_nodes = {node.index: node for node in G.customers + G.depots}
+	depot_ids: set[int] = {node.index for node in G.depots}
 
 	# Directed active edges: every consecutive pair in each route's full sequence
 	active_edges: set = set()
@@ -141,10 +142,15 @@ def generate_collapse_zones(
 			if u != v:
 				active_edges.add((u, v))
 
+	# Remove depot-adjacent edges: blocking them causes the contingency engine
+	# to try to reroute a depot as an orphan customer.
+	active_edges = {(u, v) for u, v in active_edges if u not in depot_ids and v not in depot_ids}
+
 	if not active_edges:
 		raise ValueError("No active edges found in routes")
 
-	n_target = min(max(1, round(len(active_edges) * DOD)), len(active_edges))
+	# Exact quota: int() truncates so we never exceed DOD
+	n_target = min(max(1, int(len(active_edges) * DOD)), len(active_edges))
 
 	xs = [node.x for node in all_nodes.values()]
 	ys = [node.y for node in all_nodes.values()]
@@ -161,6 +167,10 @@ def generate_collapse_zones(
 		R = rng.uniform(0.02, 0.10) * diagonal
 		t_block = _sample_t_block(rng, EDOD, max_time)
 
+		# Collect candidate edges inside this zone (not yet failed)
+		# and sort by proximity to epicenter so we keep the "core" and
+		# drop the border edges when the quota forces a truncation.
+		candidates: List[tuple[float, int, int]] = []
 		for u, v in active_edges:
 			if (u, v) in failed_edges:
 				continue
@@ -170,14 +180,21 @@ def generate_collapse_zones(
 				continue
 			dist_u = math.sqrt((node_u.x - epicenter.x) ** 2 + (node_u.y - epicenter.y) ** 2)
 			dist_v = math.sqrt((node_v.x - epicenter.x) ** 2 + (node_v.y - epicenter.y) ** 2)
+			min_dist = min(dist_u, dist_v)
 			if dist_u <= R or dist_v <= R:
-				failed_edges.add((u, v))
-				events.append(FailureEvent(
-					trigger_time=t_block,
-					type="edge_block",
-					node_a=u,
-					node_b=v,
-				))
+				candidates.append((min_dist, u, v))
+
+		# Sort nearest-first, then take only as many as the quota still allows
+		candidates.sort(key=lambda c: c[0])
+		needed = n_target - len(failed_edges)
+		for min_dist, u, v in candidates[:needed]:
+			failed_edges.add((u, v))
+			events.append(FailureEvent(
+				trigger_time=t_block,
+				type="edge_block",
+				node_a=u,
+				node_b=v,
+			))
 
 		stale = 0 if len(failed_edges) > prev_count else stale + 1
 
