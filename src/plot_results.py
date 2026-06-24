@@ -56,7 +56,7 @@ def _save(fig, stem, out_dir):
 # ---------------------------------------------------------------------------
 def plot_stage_utilisation(df, out_dir):
     stages = ["utilisation_s1_pct", "utilisation_s2_pct", "utilisation_s3_pct"]
-    labels = ["S1 — Intra-rota", "S2 — Reclusterizacao", "S3 — Insercao multi-deposito"]
+    labels = ["S1 — Contenção Local", "S2 — Reotimização Cluster", "S3 — Inserção geral"]
     colors = [STAGE_COLORS["S1"], STAGE_COLORS["S2"], STAGE_COLORS["S3"]]
 
     x = np.arange(len(df))
@@ -123,9 +123,9 @@ def plot_cost_degradation(df_multi, out_dir):
 # ---------------------------------------------------------------------------
 def plot_reroute_time_boxplot(df, out_dir):
     time_cols = {
-        "reroute_avg_s1_s": "S1 — Intra-rota",
-        "reroute_avg_s2_s": "S2 — Reclusterizacao",
-        "reroute_avg_s3_s": "S3 — Insercao multi-deposito",
+        "reroute_avg_s1_s": "S1 — Contenção Local",
+        "reroute_avg_s2_s": "S2 — Reotimização Cluster",
+        "reroute_avg_s3_s": "S3 — Inserção geral",
     }
     rows = []
     for col, label in time_cols.items():
@@ -271,7 +271,7 @@ def plot_feasibility_by_dod(df, out_dir):
             label="Totalmente viavel", color=COLOR_OK,
             edgecolor="white", linewidth=0.7)
     ax1.bar(x, grp["pct_viol"], 0.55, bottom=grp["pct_ok"],
-            label="Violacoes leves\n(duracao / capacidade)",
+            label="Violacoes flexíveis\n(duracao / capacidade)",
             color=COLOR_VIOL, edgecolor="white", linewidth=0.7)
 
     for xi, (ok, viol) in enumerate(zip(grp["pct_ok"], grp["pct_viol"])):
@@ -368,7 +368,7 @@ def plot_combined_stacked_bars(t2_df, raw_df, out_dir):
     # ===== axes[0]: Stage utilisation =====
     ax = axes[0]
     stage_cols   = ["utilisation_s1_pct", "utilisation_s2_pct", "utilisation_s3_pct"]
-    stage_labels = ["S1 — Intra-rota", "S2 — Reclusterizacao", "S3 — Insercao multi-deposito"]
+    stage_labels = ["S1 — Contenção Local", "S2 — Reotimização Cluster", "S3 — Inserção geral"]
     stage_colors = [STAGE_COLORS["S1"], STAGE_COLORS["S2"], STAGE_COLORS["S3"]]
 
     bottoms = np.zeros(len(dod_vals))
@@ -407,7 +407,7 @@ def plot_combined_stacked_bars(t2_df, raw_df, out_dir):
            label="Totalmente viavel", color=COLOR_OK,
            edgecolor="white", linewidth=0.7)
     ax.bar(x, grp["pct_viol"], BAR_W, bottom=grp["pct_ok"],
-           label="Violacoes leves (duracao/capacidade)",
+           label="Violacoes flexíveis (duracao/capacidade)",
            color=COLOR_VIOL, edgecolor="white", linewidth=0.7)
 
     for xi, (ok, viol) in enumerate(zip(grp["pct_ok"], grp["pct_viol"])):
@@ -562,6 +562,189 @@ def plot_feasibility_heatmap(raw_df, out_dir):
     fig.tight_layout()
     _save(fig, "heatmap_feasibility", out_dir)
 
+
+# ---------------------------------------------------------------------------
+# Plot 9 — Line: cost degradation vs effective edges blocked, by EDOD
+# ---------------------------------------------------------------------------
+def plot_cost_vs_effective_edges(df_results, out_dir):
+    """Line chart (mean +/- SD) of cost degradation vs effective edges blocked.
+
+    "Effective" edges are those that actually hit a vehicle in motion
+    (n_triggered_edges), as opposed to all blocked edges (n_edges_blocked).
+    This is the algorithmic view of disruption: the protocol only activates
+    when a vehicle is en-route on a blocked edge.
+
+    Key insight visible in this chart: EDOD=0.25 (early disasters) produces
+    more triggered edges on average than EDOD=0.75 (late), because early
+    events intercept vehicles that are still travelling.  The lines therefore
+    cross, which is worth discussing in the dissertation.
+
+    The x-axis is binned into intervals so that the lineplot with error bands
+    remains readable (raw counts 0-104 would produce ~100 noisy points).
+    """
+    df = df_results.dropna(subset=["n_triggered_edges", "cost_degradation_pct",
+                                   "edod_target"]).copy()
+
+    # Bin n_triggered_edges into readable intervals
+    bins   = [0, 5, 10, 20, 35, 55, 105]
+    labels = ["1-5", "6-10", "11-20", "21-35", "36-55", "56+"]
+    df["edges_bin"] = pd.cut(
+        df["n_triggered_edges"],
+        bins=bins, labels=labels, right=True, include_lowest=True,
+    )
+    # Use bin mid-point as numeric x for proper spacing
+    midpoints = {lbl: mid for lbl, mid in zip(
+        labels, [3, 8, 15.5, 28, 45.5, 70]
+    )}
+    df["edges_mid"] = df["edges_bin"].map(midpoints)
+
+    # Remove zero-triggered rows (no vehicle was ever hit — degenerate case)
+    df = df[df["n_triggered_edges"] > 0]
+
+    edod_order  = sorted(df["edod_target"].unique())
+    edod_labels = {e: EDOD_LABELS.get(f"{e:.2f}", f"EDOD = {e:.2f}") for e in edod_order}
+    df["EDOD_label"] = df["edod_target"].map(edod_labels)
+    label_order = [edod_labels[e] for e in edod_order]
+
+    palette = {edod_labels[e]: EDOD_COLORS.get(f"{e:.2f}", f"C{i}")
+               for i, e in enumerate(edod_order)}
+
+    fig, ax = plt.subplots(figsize=(9, 5.5))
+
+    # --- Background scatter (individual runs, very light) ---
+    for i, edod in enumerate(edod_order):
+        sub = df[df["edod_target"] == edod]
+        color = EDOD_COLORS.get(f"{edod:.2f}", f"C{i}")
+        ax.scatter(
+            sub["edges_mid"].astype(float) + (i - 1) * 0.6,
+            sub["cost_degradation_pct"],
+            color=color, alpha=0.08, s=12, zorder=1,
+        )
+
+    # --- Main lineplot: mean +/- SD per bin ---
+    sns.lineplot(
+        data=df,
+        x="edges_mid",
+        y="cost_degradation_pct",
+        hue="EDOD_label",
+        style="EDOD_label",
+        hue_order=label_order,
+        style_order=label_order,
+        palette=palette,
+        markers=["o", "s", "^"],
+        dashes=False,
+        errorbar="sd",
+        linewidth=2,
+        markersize=8,
+        markeredgewidth=1.5,
+        markeredgecolor="white",
+        err_kws={"alpha": 0.15},
+        ax=ax,
+        zorder=2,
+    )
+
+    # Custom x-ticks aligned to bin labels
+    ax.set_xticks(list(midpoints.values()))
+    ax.set_xticklabels(labels, fontsize=10)
+
+    ax.set_xlabel("Arestas Efetivamente Encontradas (bloqueios reais por execucao)",
+                  fontsize=12)
+    ax.set_ylabel("Degradacao de Custo Total (%)", fontsize=12)
+    ax.set_title(
+        "Otica Algoritmica: Degradacao de Custo vs Bloqueios Efetivos por EDOD",
+        fontsize=13,
+    )
+    ax.legend(
+        title="Grau Efetivo de Dinamismo (EDOD)",
+        title_fontsize=10,
+        fontsize=9.5,
+        frameon=True,
+        loc="upper left",
+    )
+    ax.grid(alpha=0.4)
+    ax.set_axisbelow(True)
+    fig.tight_layout()
+    _save(fig, "line_cost_vs_effective_edges", out_dir)
+
+
+# ---------------------------------------------------------------------------
+# Plot 10 — Bar: marginal cost per blocked edge, by EDOD
+# ---------------------------------------------------------------------------
+def plot_marginal_cost_by_edod(df_results, out_dir):
+    """Bar chart: mean cost degradation *per effective blocked edge*, by EDOD.
+
+    Hypothesis: as the day progresses (higher EDOD = later disasters), the
+    algorithm has fewer degrees of freedom -- depots are full, vehicles are
+    committed -- so each additional blocked edge costs proportionally more.
+    A rising marginal cost bar from EDOD=0.25 to EDOD=0.75 would confirm this.
+
+    Processing:
+        - Rows with n_triggered_edges == 0 are dropped (no vehicle was hit,
+          division by zero).
+        - custo_marginal = cost_degradation_pct / n_triggered_edges
+    """
+    df = df_results.dropna(subset=["n_triggered_edges", "cost_degradation_pct",
+                                   "edod_target"]).copy()
+    # Remove zero-triggered runs (degenerate: edge blocked but no vehicle hit)
+    df = df[df["n_triggered_edges"] > 0].copy()
+
+    df["custo_marginal"] = df["cost_degradation_pct"] / df["n_triggered_edges"]
+
+    edod_order  = sorted(df["edod_target"].unique())
+    edod_labels = {e: EDOD_LABELS.get(f"{e:.2f}", f"EDOD = {e:.2f}") for e in edod_order}
+    df["EDOD_label"] = df["edod_target"].map(edod_labels)
+    label_order = [edod_labels[e] for e in edod_order]
+
+    palette = {edod_labels[e]: EDOD_COLORS.get(f"{e:.2f}", f"C{i}")
+               for i, e in enumerate(edod_order)}
+
+    # Print the key numbers so the author can cite them in text
+    stats = (
+        df.groupby("EDOD_label")["custo_marginal"]
+        .agg(["mean", "std", "median"])
+        .reindex(label_order)
+    )
+    print("  Marginal cost stats (cost_deg % per triggered edge):")
+    print(stats.to_string())
+    print()
+
+    fig, ax = plt.subplots(figsize=(7, 5))
+
+    sns.barplot(
+        data=df,
+        x="EDOD_label",
+        y="custo_marginal",
+        order=label_order,
+        hue="EDOD_label",
+        hue_order=label_order,
+        palette=palette,
+        errorbar="sd",
+        capsize=0.10,
+        err_kws={"linewidth": 1.5},
+        width=0.55,
+        legend=False,
+        ax=ax,
+    )
+
+    # Annotate mean value above each bar
+    for i, lbl in enumerate(label_order):
+        mean_val = df.loc[df["EDOD_label"] == lbl, "custo_marginal"].mean()
+        ax.text(
+            i, mean_val + 0.02,
+            f"{mean_val:.3f}%",
+            ha="center", va="bottom",
+            fontsize=10, fontweight="bold", color="#111111",
+        )
+
+    ax.set_xlabel("Grau Efetivo de Dinamismo (EDOD)", fontsize=12)
+    ax.set_ylabel("Degradacao media por aresta bloqueada (%)", fontsize=12)
+    ax.set_title("Custo Marginal de Contingencia por Nivel de EDOD", fontsize=13)
+    ax.tick_params(axis="x", labelsize=10)
+    ax.grid(axis="y", alpha=0.4)
+    ax.set_axisbelow(True)
+    fig.tight_layout()
+    _save(fig, "bar_marginal_cost_by_edod", out_dir)
+
 # ---------------------------------------------------------------------------
 # CLI
 # ---------------------------------------------------------------------------
@@ -612,8 +795,14 @@ def main():
     print("[7/8] Feasibility survival line chart")
     plot_feasibility_survival(raw, out_dir)
 
-    print("[8/8] Feasibility heatmap")
+    print("[8/9] Feasibility heatmap")
     plot_feasibility_heatmap(raw, out_dir)
+
+    print("[9/10] Cost vs effective edges")
+    plot_cost_vs_effective_edges(raw, out_dir)
+
+    print("[10/10] Marginal cost by EDOD")
+    plot_marginal_cost_by_edod(raw, out_dir)
 
     print("\nDone.")
 
