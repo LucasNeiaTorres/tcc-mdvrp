@@ -1175,11 +1175,10 @@ class Visualizer:
                 if c in self.positions and c != depot_index
                 and c not in visited_elsewhere
             ]
-            # Use SET comparison (not list) so that snapshots which encode the
-            # same future customers in a different order do not trigger a plan
-            # update and the associated dotted-line flicker.
-            future_snapshot = {c for c in sanitized if c not in runtime.visited_set}
-            future_current = {c for c in runtime.plan.customers if c not in runtime.visited_set}
+            # Use LIST comparison so that a reroute that reorders customers
+            # (e.g. avoids a newly blocked edge) triggers an immediate update.
+            future_snapshot = [c for c in sanitized if c not in runtime.visited_set]
+            future_current = [c for c in runtime.plan.customers if c not in runtime.visited_set]
             if future_snapshot != future_current:
                 runtime.plan.customers = sanitized
                 plan_changed = True
@@ -1191,13 +1190,17 @@ class Visualizer:
         node_b = _as_int(event.payload.get("node_b"))
         if node_a is None or node_b is None:
             return
-        # Only record the block if the edge is currently part of a planned route.
-        # Check now (before any reroute snapshot updates the plans) so the edge
-        # is still present in plan.customers.
-        planned = self._current_planned_edges()
-        if frozenset({node_a, node_b}) not in planned:
-            return
-        self.blocked_edges.append(BlockedEdgeRecord(event.time_minutes, node_a, node_b))
+        # Record the blocked edge for rendering regardless of whether the
+        # vehicle has already passed it — the TTL mechanism fades it out.
+        pos_a = self.positions.get(node_a)
+        pos_b = self.positions.get(node_b)
+        if pos_a is not None and pos_b is not None:
+            self.blocked_edges.append(BlockedEdgeRecord(event.time_minutes, node_a, node_b))
+        # Mark all route plans dirty so any planned edge through (node_a, node_b)
+        # forces a dashed-line refresh on this frame.
+        self._planned_edges_dirty = True
+        for runtime in self.route_runtimes.values():
+            runtime.remaining_cache_valid = False
 
     def _handle_arrival(self, event: TimedEvent) -> None:
         route_id = _as_int(event.payload.get("route_id"))
